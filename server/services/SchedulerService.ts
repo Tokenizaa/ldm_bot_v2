@@ -13,6 +13,9 @@ export class SchedulerService {
   startBackgroundTimer() {
     if (this.timer) clearInterval(this.timer);
     this.timer = setInterval(() => this.checkAndProcessDuePublications().catch(err => logger.scheduler(`Erro: ${err.message}`, 'error')), 60000);
+    if (this.timer && typeof this.timer.unref === 'function') {
+      this.timer.unref();
+    }
   }
 
   stopBackgroundTimer() {

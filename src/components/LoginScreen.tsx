@@ -153,11 +153,6 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess, theme,
             </div>
           </div>
         </div>
-
-        {/* Quick helper for default admin credentials */}
-        <div className="mt-4 p-3 bg-slate-100/70 dark:bg-slate-900/40 border border-slate-200/60 dark:border-slate-800/60 rounded-xl text-center text-xs text-slate-500 dark:text-slate-400">
-          Credencial padrão do sistema: <code className="font-mono text-slate-800 dark:text-slate-200 bg-slate-200/60 dark:bg-slate-800 px-1 py-0.5 rounded">admin@forgedeals.com</code> / <code className="font-mono text-slate-800 dark:text-slate-200 bg-slate-200/60 dark:bg-slate-800 px-1 py-0.5 rounded">admin123456</code>
-        </div>
       </div>
     </div>
   );

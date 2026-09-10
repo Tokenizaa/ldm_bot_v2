@@ -400,13 +400,13 @@ export default function App() {
       {/* Main Content Area */}
       <div className="flex-1 lg:pl-64 flex flex-col min-w-0 min-h-screen">
         {/* Lean Top Header Bar */}
-        <header className="h-16 px-4 sm:px-6 lg:px-8 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between sticky top-0 z-20 transition-colors">
+        <header className="h-16 px-4 sm:px-6 lg:px-8 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between sticky top-0 z-20 transition-colors duration-200">
           <div className="flex items-center gap-3">
             {/* Mobile menu trigger */}
             <button
               id="mobile-sidebar-toggle"
               onClick={() => setMobileMenuOpen(true)}
-              className="lg:hidden p-2 rounded-xl text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"
+              className="lg:hidden p-2 rounded-xl text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700/60 transition-all duration-150 focus:outline-hidden focus-visible:ring-2 focus-visible:ring-amber-500/40"
               aria-label="Abrir menu"
             >
               <Menu className="w-5 h-5" />
@@ -415,10 +415,10 @@ export default function App() {
               <h1 className="text-base font-bold text-slate-900 dark:text-white tracking-tight">
                 {tabTitles[activeTab]}
               </h1>
-              <div className="hidden sm:flex items-center gap-2 text-[11px] text-slate-400 dark:text-slate-500">
+              <div className="hidden sm:flex items-center gap-2 text-[11px] text-slate-500 dark:text-slate-400">
                 <span>Loja do Mecânico /20889</span>
                 <span>•</span>
-                <span>NVIDIA AI (Llama 3.1 70B)</span>
+                <span>NVIDIA AI (Llama 3.2 11B)</span>
                 <span>•</span>
                 <span>Meta: 150/mês (5/dia)</span>
               </div>
@@ -429,11 +429,11 @@ export default function App() {
             {/* Quick Facebook indicator */}
             <div
               onClick={() => setActiveTab('facebook')}
-              className="cursor-pointer hidden sm:flex items-center gap-2 px-2.5 py-1 rounded-full text-xs bg-slate-100 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700/80"
+              className="cursor-pointer hidden sm:flex items-center gap-2 px-2.5 py-1 rounded-full text-xs bg-slate-100 hover:bg-slate-200/70 dark:bg-slate-800/80 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700/80 text-slate-700 dark:text-slate-300 transition-colors"
               title="Clique para abrir configuração do Facebook"
             >
-              <span className={`w-2 h-2 rounded-full ${facebookStatus?.connected ? 'bg-emerald-500' : 'bg-rose-500'}`} />
-              <span className="text-[11px] font-medium text-slate-700 dark:text-slate-300">
+              <span className={`w-2 h-2 rounded-full ${facebookStatus?.connected ? 'bg-emerald-500 ring-2 ring-emerald-500/30' : 'bg-rose-500 ring-2 ring-rose-500/30'}`} />
+              <span className="text-[11px] font-medium">
                 {facebookStatus?.connected ? 'Facebook Conectado' : 'Facebook Desconectado'}
               </span>
             </div>
@@ -443,7 +443,7 @@ export default function App() {
               id="global-refresh-btn"
               onClick={fetchAllData}
               disabled={isRefreshing}
-              className="p-2 rounded-xl text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800 transition-colors disabled:opacity-50"
+              className="p-2 rounded-xl text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800 transition-colors disabled:opacity-50 focus:outline-hidden focus-visible:ring-2 focus-visible:ring-amber-500/40"
               title="Atualizar dados agora"
             >
               <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin text-amber-500' : ''}`} />
