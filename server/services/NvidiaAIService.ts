@@ -11,7 +11,8 @@ export interface NvidiaGenerationResult {
 
 export class NvidiaAIService {
   private readonly apiUrl = 'https://integrate.api.nvidia.com/v1/chat/completions';
-  private readonly defaultModel = 'meta/llama-3.1-70b-instruct';
+  private readonly defaultModel = process.env.NVIDIA_MODEL || 'meta/llama-3.2-11b-vision-instruct';
+  private readonly activeFallbackModel = 'meta/llama-3.2-11b-vision-instruct';
 
   isConfigured(): boolean {
     return Boolean(process.env.NVIDIA_API_KEY?.trim());
@@ -19,7 +20,7 @@ export class NvidiaAIService {
 
   async generateProductCopy(product: Product, affiliateUrl: string, customModel?: string): Promise<NvidiaGenerationResult> {
     const apiKey = process.env.NVIDIA_API_KEY?.trim();
-    const model = customModel || process.env.NVIDIA_MODEL || this.defaultModel;
+    let model = customModel || process.env.NVIDIA_MODEL || this.defaultModel;
 
     if (!apiKey) {
       const error = 'NVIDIA_API_KEY não configurada. A geração de copy não pode continuar.';
@@ -61,6 +62,10 @@ export class NvidiaAIService {
       });
 
       if (!response.ok) {
+        if (response.status === 410 && model !== this.activeFallbackModel) {
+          logger.ai(`Modelo ${model} descontinuado pela NVIDIA (HTTP 410). Redirecionando automaticamente para ${this.activeFallbackModel}...`, 'warn');
+          return this.generateProductCopy(product, affiliateUrl, this.activeFallbackModel);
+        }
         const text = await response.text();
         throw new Error(`NVIDIA API HTTP ${response.status}: ${text.slice(0, 300)}`);
       }
