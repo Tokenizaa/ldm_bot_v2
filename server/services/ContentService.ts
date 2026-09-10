@@ -5,21 +5,20 @@ import { buildAffiliateUrl } from '../utils/affiliate.js';
 
 export class ContentService {
   async generateCopyForProduct(product: Product, customModel?: string): Promise<{ content: string; affiliateUrl: string }> {
-    // Strictly build and validate affiliate url
     const affiliateUrl = buildAffiliateUrl(product.affiliate_url || product.original_url);
 
-    // Requirement 22: Validate before publication
     if (!affiliateUrl.endsWith('/20889')) {
-      const errMsg = `Affiliate URL validation failed: does not end with /20889 (${affiliateUrl})`;
-      logger.ai(errMsg, 'error');
-      throw new Error(errMsg);
+      const error = `URL de afiliado inválida: ${affiliateUrl}`;
+      logger.ai(error, 'error');
+      throw new Error(error);
     }
 
     const result = await nvidiaAI.generateProductCopy(product, affiliateUrl, customModel);
-    return {
-      content: result.content,
-      affiliateUrl
-    };
+    if (!result.success || !result.content.trim()) {
+      throw new Error(result.error || 'NVIDIA AI não conseguiu gerar a copy.');
+    }
+
+    return { content: result.content, affiliateUrl };
   }
 }
 
