@@ -86,6 +86,8 @@ export interface FacebookSessionStatus {
   status: 'connected' | 'requires_reauth' | 'disconnected';
   last_authenticated_at?: string;
   configured_group_url?: string;
+  group_accessible?: boolean;
+  connected_user?: string;
   profile_dir: string;
   details?: string;
 }
@@ -93,7 +95,7 @@ export interface FacebookSessionStatus {
 export interface LogEntry {
   id: string;
   timestamp: string;
-  source: 'Crawler' | 'AI' | 'Scheduler' | 'Facebook' | 'System';
+  source: 'Crawler' | 'AI' | 'Scheduler' | 'Facebook' | 'Supabase' | 'Auth' | 'System';
   message: string;
   level: 'info' | 'warn' | 'error' | 'success';
 }

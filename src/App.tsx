@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Header } from './components/Header';
+import { Sidebar, TabType } from './components/Sidebar';
 import { DashboardTab } from './components/DashboardTab';
 import { ProductsTab } from './components/ProductsTab';
 import { ScheduleTab } from './components/ScheduleTab';
@@ -7,6 +7,7 @@ import { FacebookTab } from './components/FacebookTab';
 import { SettingsTab } from './components/SettingsTab';
 import { LogsTab } from './components/LogsTab';
 import { CopyModal } from './components/CopyModal';
+import { LoginScreen } from './components/LoginScreen';
 import {
   DashboardStats,
   OperationalQuota,
@@ -14,11 +15,28 @@ import {
   Publication,
   FacebookSessionStatus,
   AppSettings,
-  LogEntry
+  LogEntry,
+  SystemUser,
+  ThemeMode
 } from './types';
+import { apiRequest, getAuthToken, removeAuthToken } from './services/apiClient';
+import { Menu, RefreshCw, AlertCircle, CheckCircle2, ShieldCheck } from 'lucide-react';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<string>('dashboard');
+  // Authentication state
+  const [currentUser, setCurrentUser] = useState<SystemUser | null>(null);
+  const [isCheckingAuth, setIsCheckingAuth] = useState(true);
+
+  // Theme state
+  const [theme, setTheme] = useState<ThemeMode>(() => {
+    return (localStorage.getItem('forgedeals_theme') as ThemeMode) || 'dark';
+  });
+
+  // Navigation and UI state
+  const [activeTab, setActiveTab] = useState<TabType>('dashboard');
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
+  // Application data
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [quota, setQuota] = useState<OperationalQuota | null>(null);
   const [products, setProducts] = useState<Product[]>([]);
@@ -37,118 +55,153 @@ export default function App() {
   const [isConnectingFb, setIsConnectingFb] = useState(false);
   const [isTestingFb, setIsTestingFb] = useState(false);
 
-  // Notification / feedback toast
+  // Toast feedback
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
 
   const showToast = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
     setToast({ message, type });
-    setTimeout(() => setToast(null), 4000);
+    setTimeout(() => setToast(null), 4500);
   };
 
-  // Modal states
+  // Copy modal
   const [selectedProductForCopy, setSelectedProductForCopy] = useState<Product | undefined>();
   const [selectedPublicationForCopy, setSelectedPublicationForCopy] = useState<Publication | undefined>();
   const [isCopyModalOpen, setIsCopyModalOpen] = useState(false);
 
-  // Data fetching
+  // Apply theme to document
+  useEffect(() => {
+    localStorage.setItem('forgedeals_theme', theme);
+    const root = document.documentElement;
+    const body = document.body;
+
+    const applyDark = (isDark: boolean) => {
+      if (isDark) {
+        root.classList.add('dark');
+        body.classList.add('dark');
+      } else {
+        root.classList.remove('dark');
+        body.classList.remove('dark');
+      }
+    };
+
+    if (theme === 'dark') {
+      applyDark(true);
+    } else if (theme === 'light') {
+      applyDark(false);
+    } else {
+      const systemDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+      applyDark(systemDark);
+    }
+  }, [theme]);
+
+  // Auth verification on mount
+  useEffect(() => {
+    const checkAuth = async () => {
+      const token = getAuthToken();
+      if (!token) {
+        setIsCheckingAuth(false);
+        return;
+      }
+
+      try {
+        const res = await apiRequest<{ authenticated: boolean; user?: SystemUser }>('/api/auth/me');
+        if (res.authenticated && res.user) {
+          setCurrentUser(res.user);
+        } else {
+          removeAuthToken();
+          setCurrentUser(null);
+        }
+      } catch (err) {
+        removeAuthToken();
+        setCurrentUser(null);
+      } finally {
+        setIsCheckingAuth(false);
+      }
+    };
+
+    checkAuth();
+
+    const handleUnauthorized = () => {
+      setCurrentUser(null);
+      showToast('Sessão expirada. Faça login novamente.', 'error');
+    };
+
+    window.addEventListener('forgedeals_unauthorized', handleUnauthorized);
+    return () => window.removeEventListener('forgedeals_unauthorized', handleUnauthorized);
+  }, []);
+
+  // Fetch all dashboard data
   const fetchAllData = useCallback(async () => {
+    if (!currentUser) return;
     setIsRefreshing(true);
     try {
       // 1. Stats & Quota
-      const statsRes = await fetch('/api/stats');
-      if (statsRes.ok) {
-        const data = await statsRes.json();
-        setStats(data.stats);
-        setQuota(data.quota);
-        setEnvStatus(data.envStatus);
-      }
+      const statsData = await apiRequest('/api/stats');
+      setStats(statsData.stats);
+      setQuota(statsData.quota);
+      setEnvStatus(statsData.envStatus);
 
       // 2. Products
-      const prodRes = await fetch('/api/products');
-      if (prodRes.ok) {
-        const data = await prodRes.json();
-        setProducts(data.products || []);
-      }
+      const prodData = await apiRequest('/api/products');
+      setProducts(prodData.products || []);
 
       // 3. Publications
-      const pubRes = await fetch('/api/publications');
-      if (pubRes.ok) {
-        const data = await pubRes.json();
-        setPublications(data.publications || []);
-      }
+      const pubData = await apiRequest('/api/publications');
+      setPublications(pubData.publications || []);
 
-      // 4. Facebook
-      const fbRes = await fetch('/api/facebook/status');
-      if (fbRes.ok) {
-        const data = await fbRes.json();
-        setFacebookStatus(data);
-      }
+      // 4. Facebook Status
+      const fbData = await apiRequest('/api/facebook/status');
+      setFacebookStatus(fbData);
 
       // 5. Settings
-      const setRes = await fetch('/api/settings');
-      if (setRes.ok) {
-        const data = await setRes.json();
-        setSettings(data.settings);
-      }
+      const setData = await apiRequest('/api/settings');
+      setSettings(setData.settings);
 
       // 6. Logs
-      const logsRes = await fetch('/api/logs?limit=50');
-      if (logsRes.ok) {
-        const data = await logsRes.json();
-        setLogs(data.logs || []);
-      }
+      const logsData = await apiRequest('/api/logs?limit=60');
+      setLogs(logsData.logs || []);
 
-      // 7. Supabase DDL
-      const sqlRes = await fetch('/api/supabase/schema');
-      if (sqlRes.ok) {
-        const data = await sqlRes.json();
-        setSupabaseSql(data.schema || '');
-      }
+      // 7. Supabase SQL
+      const sqlData = await apiRequest('/api/supabase-sql').catch(() => ({ sql: '' }));
+      if (sqlData.sql) setSupabaseSql(sqlData.sql);
     } catch (err: any) {
-      console.error('Error fetching data:', err);
+      // Silent error or toast if user initiated
     } finally {
       setIsRefreshing(false);
     }
-  }, []);
+  }, [currentUser]);
 
+  // Initial load and periodic poll
   useEffect(() => {
-    fetchAllData();
-    const interval = setInterval(fetchAllData, 30000); // 30s background sync
-    return () => clearInterval(interval);
-  }, [fetchAllData]);
+    if (currentUser) {
+      fetchAllData();
+      const interval = setInterval(fetchAllData, 30000);
+      return () => clearInterval(interval);
+    }
+  }, [currentUser, fetchAllData]);
 
-  // Actions
+  // Operational Handlers
   const handleRunCrawler = async () => {
     setIsRunningCrawler(true);
-    showToast('Iniciando raspagem de ofertas na Loja do Mecânico...', 'info');
+    showToast('Executando raspagem de produtos reais na Loja do Mecânico...', 'info');
     try {
-      const res = await fetch('/api/crawler/run', { method: 'POST' });
-      const data = await res.json();
-      if (data.success) {
-        showToast(`Crawler concluído! Encontrados: ${data.products_found}, Válidos: ${data.products_valid}, Novos: ${data.products_new}`, 'success');
-        await fetchAllData();
-      } else {
-        showToast(`Falha no crawler: ${data.error}`, 'error');
-      }
+      const res = await apiRequest('/api/crawler/run', { method: 'POST' });
+      showToast(`Crawler concluído: ${res.found} encontrados, ${res.valid} válidos com link /20889!`, 'success');
+      await fetchAllData();
     } catch (err: any) {
-      showToast(`Erro ao executar crawler: ${err.message}`, 'error');
+      showToast(`Erro no crawler: ${err.message}`, 'error');
     } finally {
       setIsRunningCrawler(false);
     }
   };
 
-  const handleGenerateBatch = async () => {
+  const handleGenerateTodayBatch = async () => {
     setIsGeneratingBatch(true);
-    showToast('Gerando lote de 5 ofertas com NVIDIA AI e agendando...', 'info');
+    showToast('Gerando lote diário de 5 publicações com NVIDIA AI...', 'info');
     try {
-      const res = await fetch('/api/scheduler/batch-today', { method: 'POST' });
-      const data = await res.json();
-      if (data.success) {
-        showToast(data.message || '5 ofertas agendadas com sucesso!', 'success');
-        await fetchAllData();
-      } else {
-        showToast(`Falha ao gerar lote: ${data.error || data.message}`, 'error');
-      }
+      const res = await apiRequest('/api/scheduler/generate-batch', { method: 'POST' });
+      showToast(`Lote gerado com sucesso! ${res.generated} novas publicações agendadas para hoje.`, 'success');
+      await fetchAllData();
     } catch (err: any) {
       showToast(`Erro ao gerar lote: ${err.message}`, 'error');
     } finally {
@@ -156,109 +209,31 @@ export default function App() {
     }
   };
 
-  const handleProcessDue = async () => {
+  const handleProcessDuePublications = async () => {
     setIsProcessingDue(true);
-    showToast('Verificando publicações vencidas para envio ao Facebook...', 'info');
+    showToast('Verificando e publicando ofertas agendadas no Facebook...', 'info');
     try {
-      const res = await fetch('/api/scheduler/run-due', { method: 'POST' });
-      const data = await res.json();
-      if (data.success) {
-        showToast(`Processamento concluído: ${data.processed} publicações enviadas!`, 'success');
-        await fetchAllData();
-      } else {
-        showToast(`Falha ao processar publicações: ${data.error}`, 'error');
-      }
+      const res = await apiRequest('/api/scheduler/process-due', { method: 'POST' });
+      showToast(`Processamento concluído: ${res.published} publicadas, ${res.failed} falhas.`, res.failed > 0 ? 'error' : 'success');
+      await fetchAllData();
     } catch (err: any) {
-      showToast(`Erro: ${err.message}`, 'error');
+      showToast(`Erro no envio: ${err.message}`, 'error');
     } finally {
       setIsProcessingDue(false);
     }
   };
 
-  const handlePublishNow = async (id: string) => {
-    showToast('Publicando agora no grupo do Facebook...', 'info');
-    try {
-      const res = await fetch(`/api/publications/${id}/publish-now`, { method: 'POST' });
-      const data = await res.json();
-      if (data.success) {
-        showToast('Publicação enviada com sucesso para o Facebook!', 'success');
-        await fetchAllData();
-      } else {
-        showToast(`Falha na publicação: ${data.error}`, 'error');
-      }
-    } catch (err: any) {
-      showToast(`Erro: ${err.message}`, 'error');
-    }
-  };
-
-  const handleRetry = async (id: string) => {
-    showToast('Tentando novamente a publicação...', 'info');
-    try {
-      const res = await fetch(`/api/publications/${id}/retry`, { method: 'POST' });
-      const data = await res.json();
-      if (data.success) {
-        showToast('Publicação enviada com sucesso!', 'success');
-        await fetchAllData();
-      } else {
-        showToast(`Erro no retry: ${data.error}`, 'error');
-      }
-    } catch (err: any) {
-      showToast(`Erro: ${err.message}`, 'error');
-    }
-  };
-
-  const handleCancel = async (id: string) => {
-    try {
-      await fetch(`/api/publications/${id}/cancel`, { method: 'POST' });
-      showToast('Publicação cancelada.', 'info');
-      await fetchAllData();
-    } catch (err: any) {
-      showToast(`Erro: ${err.message}`, 'error');
-    }
-  };
-
-  const handleReschedule = async (id: string, newDateTime: string) => {
-    try {
-      await fetch(`/api/publications/${id}/reschedule`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ scheduled_at: newDateTime })
-      });
-      showToast('Horário reagendado com sucesso!', 'success');
-      await fetchAllData();
-    } catch (err: any) {
-      showToast(`Erro: ${err.message}`, 'error');
-    }
-  };
-
-  const handleDeletePublication = async (id: string) => {
-    try {
-      await fetch(`/api/publications/${id}`, { method: 'DELETE' });
-      showToast('Publicação removida.', 'info');
-      await fetchAllData();
-    } catch (err: any) {
-      showToast(`Erro: ${err.message}`, 'error');
-    }
-  };
-
-  const handleConnectFacebook = async (storageState?: string) => {
+  const handleConnectFacebook = async (sessionData?: string) => {
     setIsConnectingFb(true);
-    showToast('Iniciando configuração do perfil persistente do Facebook...', 'info');
     try {
-      const res = await fetch('/api/facebook/connect', {
+      const res = await apiRequest('/api/facebook/connect', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ storageState })
+        body: JSON.stringify({ sessionData })
       });
-      const data = await res.json();
-      if (data.success) {
-        showToast(data.message, 'success');
-        await fetchAllData();
-      } else {
-        showToast(data.message, 'error');
-      }
+      showToast('Sessão do Facebook salva e perfil persistente validado!', 'success');
+      await fetchAllData();
     } catch (err: any) {
-      showToast(`Erro de conexão com Facebook: ${err.message}`, 'error');
+      showToast(`Erro na conexão com o Facebook: ${err.message}`, 'error');
     } finally {
       setIsConnectingFb(false);
     }
@@ -267,177 +242,320 @@ export default function App() {
   const handleTestPublish = async () => {
     setIsTestingFb(true);
     try {
-      const res = await fetch('/api/facebook/test-publish', { method: 'POST' });
-      const data = await res.json();
-      if (data.success) {
-        showToast('Publicação de teste enviada com sucesso para o Facebook!', 'success');
-        await fetchAllData();
-      } else {
-        showToast(`Erro no teste: ${data.error}`, 'error');
-      }
+      const res = await apiRequest('/api/facebook/test-publish', { method: 'POST' });
+      showToast('Publicação de teste executada com sucesso no grupo!', 'success');
+      await fetchAllData();
+    } catch (err: any) {
+      showToast(`Falha no teste: ${err.message}`, 'error');
+      throw err;
     } finally {
       setIsTestingFb(false);
     }
   };
 
-  const handleSaveSettings = async (newSettings: Partial<AppSettings>) => {
+  const handlePublishNow = async (id: string) => {
     try {
-      const res = await fetch('/api/settings', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(newSettings)
-      });
-      const data = await res.json();
-      if (data.success) {
-        setSettings(data.settings);
-        showToast('Configurações salvas com sucesso!', 'success');
-      }
+      showToast('Enviando publicação imediatamente ao Facebook...', 'info');
+      await apiRequest(`/api/publications/${id}/publish-now`, { method: 'POST' });
+      showToast('Publicado com sucesso no Facebook Group!', 'success');
+      await fetchAllData();
     } catch (err: any) {
-      showToast(`Erro ao salvar configurações: ${err.message}`, 'error');
+      showToast(`Erro ao publicar: ${err.message}`, 'error');
     }
   };
 
-  const handleScheduleFromModal = async (productId: string, content: string, scheduleTime: string) => {
+  const handleRetryPublication = async (id: string) => {
     try {
-      const res = await fetch('/api/publications', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          product_id: productId,
-          content,
-          scheduled_at: scheduleTime,
-          facebook_group_url: settings?.facebook_group_url
-        })
-      });
-      const data = await res.json();
-      if (data.success) {
-        showToast('Oferta agendada com sucesso!', 'success');
-        await fetchAllData();
-      } else {
-        showToast(data.error || 'Erro ao agendar', 'error');
-      }
-    } catch (e: any) {
-      showToast(e.message, 'error');
+      await apiRequest(`/api/publications/${id}/retry`, { method: 'POST' });
+      showToast('Publicação reagendada para nova tentativa.', 'success');
+      await fetchAllData();
+    } catch (err: any) {
+      showToast(`Erro ao retentar: ${err.message}`, 'error');
     }
+  };
+
+  const handleCancelPublication = async (id: string) => {
+    try {
+      await apiRequest(`/api/publications/${id}/cancel`, { method: 'POST' });
+      showToast('Publicação cancelada.', 'info');
+      await fetchAllData();
+    } catch (err: any) {
+      showToast(`Erro ao cancelar: ${err.message}`, 'error');
+    }
+  };
+
+  const handleReschedulePublication = async (id: string, newDateTime: string) => {
+    try {
+      await apiRequest(`/api/publications/${id}/reschedule`, {
+        method: 'POST',
+        body: JSON.stringify({ scheduled_at: newDateTime })
+      });
+      showToast('Horário atualizado com sucesso!', 'success');
+      await fetchAllData();
+    } catch (err: any) {
+      showToast(`Erro ao reagendar: ${err.message}`, 'error');
+    }
+  };
+
+  const handleDeletePublication = async (id: string) => {
+    try {
+      await apiRequest(`/api/publications/${id}`, { method: 'DELETE' });
+      showToast('Publicação removida.', 'info');
+      await fetchAllData();
+    } catch (err: any) {
+      showToast(`Erro ao excluir: ${err.message}`, 'error');
+    }
+  };
+
+  const handleSaveSettings = async (newSettings: Partial<AppSettings>) => {
+    try {
+      const res = await apiRequest('/api/settings', {
+        method: 'POST',
+        body: JSON.stringify(newSettings)
+      });
+      setSettings(res.settings);
+      showToast('Configurações atualizadas!', 'success');
+    } catch (err: any) {
+      showToast(`Erro ao salvar configurações: ${err.message}`, 'error');
+      throw err;
+    }
+  };
+
+  const handleLogout = () => {
+    removeAuthToken();
+    setCurrentUser(null);
+    showToast('Você saiu do sistema.', 'info');
+  };
+
+  // If checking authentication
+  if (isCheckingAuth) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950">
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-8 h-8 border-3 border-amber-500 border-t-transparent rounded-full animate-spin" />
+          <span className="text-xs font-medium text-slate-500 dark:text-slate-400">Iniciando ForgeDeals...</span>
+        </div>
+      </div>
+    );
+  }
+
+  // If user is not authenticated, show LoginScreen
+  if (!currentUser) {
+    return (
+      <LoginScreen
+        onLoginSuccess={(user) => {
+          setCurrentUser(user);
+          showToast(`Bem-vindo, ${user.name}!`, 'success');
+        }}
+        theme={theme}
+        onThemeChange={setTheme}
+      />
+    );
+  }
+
+  const tabTitles: Record<TabType, string> = {
+    dashboard: 'Dashboard Operacional',
+    products: 'Catálogo de Produtos',
+    schedule: 'Agenda de Publicações',
+    facebook: 'Conexão Facebook',
+    settings: 'Configurações do Sistema',
+    logs: 'Console de Logs'
   };
 
   return (
-    <div className="min-h-screen bg-slate-100 text-slate-900 font-sans flex flex-col">
-      {/* Toast Notification */}
+    <div className="min-h-screen flex bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 transition-colors">
+      {/* Toast alert */}
       {toast && (
         <div className="fixed bottom-5 right-5 z-50 animate-in fade-in slide-in-from-bottom-5">
-          <div className={`px-4 py-3 rounded-xl shadow-lg text-sm font-medium border ${
-            toast.type === 'success' ? 'bg-emerald-800 text-emerald-50 border-emerald-700' :
-            toast.type === 'error' ? 'bg-red-800 text-red-50 border-red-700' :
-            'bg-slate-900 text-slate-100 border-slate-700'
+          <div className={`p-4 rounded-2xl shadow-xl flex items-center gap-3 text-xs font-semibold border ${
+            toast.type === 'success'
+              ? 'bg-emerald-50 dark:bg-emerald-950/90 text-emerald-900 dark:text-emerald-200 border-emerald-300 dark:border-emerald-800'
+              : toast.type === 'error'
+              ? 'bg-rose-50 dark:bg-rose-950/90 text-rose-900 dark:text-rose-200 border-rose-300 dark:border-rose-800'
+              : 'bg-slate-900 dark:bg-slate-800 text-white border-slate-700'
           }`}>
-            {toast.message}
+            {toast.type === 'success' ? (
+              <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
+            ) : (
+              <AlertCircle className="w-4 h-4 text-rose-500 shrink-0" />
+            )}
+            <span>{toast.message}</span>
           </div>
         </div>
       )}
 
-      {/* Header */}
-      <Header
-        quota={quota}
+      {/* Sidebar Navigation (Replaces old navbar) */}
+      <Sidebar
         activeTab={activeTab}
         setActiveTab={setActiveTab}
-        envStatus={envStatus}
-        onRefresh={fetchAllData}
-        isRefreshing={isRefreshing}
+        currentUser={currentUser}
+        onLogout={handleLogout}
+        theme={theme}
+        onThemeChange={setTheme}
+        mobileOpen={mobileMenuOpen}
+        setMobileOpen={setMobileMenuOpen}
+        facebookStatus={facebookStatus || undefined}
       />
 
-      {/* Main Content Body */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
-        {activeTab === 'dashboard' && (
-          <DashboardTab
-            stats={stats}
-            quota={quota}
-            onRunCrawler={handleRunCrawler}
-            onGenerateBatch={handleGenerateBatch}
-            onProcessDue={handleProcessDue}
-            isRunningCrawler={isRunningCrawler}
-            isGeneratingBatch={isGeneratingBatch}
-            isProcessingDue={isProcessingDue}
-            onSelectPublication={(pub) => {
-              setSelectedPublicationForCopy(pub);
-              setSelectedProductForCopy(undefined);
-              setIsCopyModalOpen(true);
-            }}
-            onNavigateToTab={setActiveTab}
-          />
-        )}
+      {/* Main Content Area */}
+      <div className="flex-1 lg:pl-64 flex flex-col min-w-0 min-h-screen">
+        {/* Lean Top Header Bar */}
+        <header className="h-16 px-4 sm:px-6 lg:px-8 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between sticky top-0 z-20 transition-colors">
+          <div className="flex items-center gap-3">
+            {/* Mobile menu trigger */}
+            <button
+              id="mobile-sidebar-toggle"
+              onClick={() => setMobileMenuOpen(true)}
+              className="lg:hidden p-2 rounded-xl text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"
+              aria-label="Abrir menu"
+            >
+              <Menu className="w-5 h-5" />
+            </button>
+            <div>
+              <h1 className="text-base font-bold text-slate-900 dark:text-white tracking-tight">
+                {tabTitles[activeTab]}
+              </h1>
+              <div className="hidden sm:flex items-center gap-2 text-[11px] text-slate-400 dark:text-slate-500">
+                <span>Loja do Mecânico /20889</span>
+                <span>•</span>
+                <span>NVIDIA AI (Llama 3.1 70B)</span>
+                <span>•</span>
+                <span>Meta: 150/mês (5/dia)</span>
+              </div>
+            </div>
+          </div>
 
-        {activeTab === 'products' && (
-          <ProductsTab
-            products={products}
-            isLoading={isRefreshing}
-            onRefresh={fetchAllData}
-            onGenerateCopy={(product) => {
-              setSelectedProductForCopy(product);
-              setSelectedPublicationForCopy(undefined);
-              setIsCopyModalOpen(true);
-            }}
-          />
-        )}
+          <div className="flex items-center gap-3">
+            {/* Quick Facebook indicator */}
+            <div
+              onClick={() => setActiveTab('facebook')}
+              className="cursor-pointer hidden sm:flex items-center gap-2 px-2.5 py-1 rounded-full text-xs bg-slate-100 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700/80"
+              title="Clique para abrir configuração do Facebook"
+            >
+              <span className={`w-2 h-2 rounded-full ${facebookStatus?.connected ? 'bg-emerald-500' : 'bg-rose-500'}`} />
+              <span className="text-[11px] font-medium text-slate-700 dark:text-slate-300">
+                {facebookStatus?.connected ? 'Facebook Conectado' : 'Facebook Desconectado'}
+              </span>
+            </div>
 
-        {activeTab === 'schedule' && (
-          <ScheduleTab
-            publications={publications}
-            onPublishNow={handlePublishNow}
-            onRetry={handleRetry}
-            onCancel={handleCancel}
-            onReschedule={handleReschedule}
-            onDelete={handleDeletePublication}
-            onViewDetails={(pub) => {
-              setSelectedPublicationForCopy(pub);
-              setSelectedProductForCopy(undefined);
-              setIsCopyModalOpen(true);
-            }}
-            onGenerateTodayBatch={handleGenerateBatch}
-            isGeneratingBatch={isGeneratingBatch}
-          />
-        )}
+            {/* Refresh button */}
+            <button
+              id="global-refresh-btn"
+              onClick={fetchAllData}
+              disabled={isRefreshing}
+              className="p-2 rounded-xl text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800 transition-colors disabled:opacity-50"
+              title="Atualizar dados agora"
+            >
+              <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin text-amber-500' : ''}`} />
+            </button>
+          </div>
+        </header>
 
-        {activeTab === 'facebook' && (
-          <FacebookTab
-            status={facebookStatus}
-            settings={settings}
-            onConnect={handleConnectFacebook}
-            onTestPublish={handleTestPublish}
-            isConnecting={isConnectingFb}
-            isTesting={isTestingFb}
-          />
-        )}
+        {/* Content Container */}
+        <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-7xl w-full mx-auto">
+          {activeTab === 'dashboard' && (
+            <DashboardTab
+              stats={stats}
+              quota={quota}
+              onRunCrawler={handleRunCrawler}
+              onGenerateBatch={handleGenerateTodayBatch}
+              onProcessDue={handleProcessDuePublications}
+              isRunningCrawler={isRunningCrawler}
+              isGeneratingBatch={isGeneratingBatch}
+              isProcessingDue={isProcessingDue}
+              onSelectPublication={(pub) => {
+                setSelectedPublicationForCopy(pub);
+                setSelectedProductForCopy(undefined);
+                setIsCopyModalOpen(true);
+              }}
+              onNavigateToTab={(tab) => setActiveTab(tab as TabType)}
+            />
+          )}
 
-        {activeTab === 'logs' && (
-          <LogsTab
-            logs={logs}
-            onRefresh={fetchAllData}
-            isLoading={isRefreshing}
-          />
-        )}
+          {activeTab === 'products' && (
+            <ProductsTab
+              products={products}
+              isLoading={isRunningCrawler}
+              onRefresh={fetchAllData}
+              onGenerateCopy={(product) => {
+                setSelectedProductForCopy(product);
+                setSelectedPublicationForCopy(undefined);
+                setIsCopyModalOpen(true);
+              }}
+            />
+          )}
 
-        {activeTab === 'settings' && (
-          <SettingsTab
-            settings={settings}
-            onSaveSettings={handleSaveSettings}
-            envStatus={{
-              hasNvidiaKey: envStatus?.nvidiaConfigured ?? false,
-              hasSupabaseUrl: envStatus?.supabaseConnected ?? false,
-              hasSupabaseKey: envStatus?.supabaseConnected ?? false
-            }}
-            supabaseSql={supabaseSql}
-          />
-        )}
-      </main>
+          {activeTab === 'schedule' && (
+            <ScheduleTab
+              publications={publications}
+              onPublishNow={handlePublishNow}
+              onRetry={handleRetryPublication}
+              onCancel={handleCancelPublication}
+              onReschedule={handleReschedulePublication}
+              onDelete={handleDeletePublication}
+              onViewDetails={(pub) => {
+                setSelectedPublicationForCopy(pub);
+                setSelectedProductForCopy(undefined);
+                setIsCopyModalOpen(true);
+              }}
+              onGenerateTodayBatch={handleGenerateTodayBatch}
+              isGeneratingBatch={isGeneratingBatch}
+            />
+          )}
 
-      {/* Copy Modal */}
+          {activeTab === 'facebook' && (
+            <FacebookTab
+              status={facebookStatus}
+              settings={settings}
+              onConnect={handleConnectFacebook}
+              onTestPublish={handleTestPublish}
+              isConnecting={isConnectingFb}
+              isTesting={isTestingFb}
+              onRefreshStatus={fetchAllData}
+            />
+          )}
+
+          {activeTab === 'settings' && (
+            <SettingsTab
+              settings={settings}
+              onSaveSettings={handleSaveSettings}
+              envStatus={envStatus}
+              supabaseSql={supabaseSql}
+            />
+          )}
+
+          {activeTab === 'logs' && (
+            <LogsTab
+              logs={logs}
+              onRefresh={fetchAllData}
+              isLoading={isRefreshing}
+            />
+          )}
+        </main>
+      </div>
+
+      {/* Copy & AI Generator Modal */}
       <CopyModal
-        product={selectedProductForCopy}
-        publication={selectedPublicationForCopy}
         isOpen={isCopyModalOpen}
         onClose={() => setIsCopyModalOpen(false)}
-        onSaveAndSchedule={handleScheduleFromModal}
+        product={selectedProductForCopy}
+        publication={selectedPublicationForCopy}
+        onSaveAndSchedule={async (productId, content, scheduleTime) => {
+          try {
+            await apiRequest('/api/publications', {
+              method: 'POST',
+              body: JSON.stringify({
+                product_id: productId,
+                content,
+                scheduled_at: scheduleTime
+              })
+            });
+            showToast('Oferta agendada com sucesso!', 'success');
+            await fetchAllData();
+          } catch (err: any) {
+            showToast(`Erro ao agendar: ${err.message}`, 'error');
+          }
+        }}
         onPublishNow={handlePublishNow}
       />
     </div>

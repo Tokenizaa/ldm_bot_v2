@@ -1,4 +1,4 @@
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import { storage } from '../services/StorageService.js';
 import { crawler } from '../services/CrawlerService.js';
 import { contentService } from '../services/ContentService.js';
@@ -6,9 +6,82 @@ import { scheduler } from '../services/SchedulerService.js';
 import { facebookService } from '../services/FacebookService.js';
 import { nvidiaAI } from '../services/NvidiaAIService.js';
 import { logger } from '../services/LoggerService.js';
+import { authService } from '../services/AuthService.js';
 import { SUPABASE_SQL_SCHEMA } from '../utils/supabaseSchema.js';
 
 export const apiRouter = Router();
+
+// --- AUTHENTICATION MIDDLEWARE ---
+export function requireAuth(req: Request, res: Response, next: NextFunction) {
+  const authHeader = req.headers.authorization || (req.headers['x-auth-token'] as string);
+  let token = '';
+
+  if (authHeader) {
+    token = authHeader.startsWith('Bearer ') ? authHeader.substring(7).trim() : authHeader.trim();
+  }
+
+  const session = authService.verifyToken(token);
+
+  if (!session) {
+    return res.status(401).json({
+      success: false,
+      error: 'Sessão expirada ou não autenticada. Faça login para acessar.'
+    });
+  }
+
+  (req as any).user = session;
+  next();
+}
+
+// --- PUBLIC ROUTES (HEALTH & AUTH) ---
+apiRouter.get('/health', (req: Request, res: Response) => {
+  res.json({ status: 'ok', uptime: process.uptime() });
+});
+
+apiRouter.post('/auth/login', async (req: Request, res: Response) => {
+  try {
+    const { email, password } = req.body;
+    const result = await authService.login(email, password, storage.getSupabaseClient());
+    if (!result.success) {
+      return res.status(401).json(result);
+    }
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+apiRouter.get('/auth/me', (req: Request, res: Response) => {
+  const authHeader = req.headers.authorization || (req.headers['x-auth-token'] as string);
+  let token = '';
+  if (authHeader) {
+    token = authHeader.startsWith('Bearer ') ? authHeader.substring(7).trim() : authHeader.trim();
+  }
+
+  const session = authService.verifyToken(token);
+  if (!session) {
+    return res.status(401).json({ success: false, authenticated: false });
+  }
+
+  res.json({
+    success: true,
+    authenticated: true,
+    user: { id: session.id, email: session.email, name: session.name, role: session.role }
+  });
+});
+
+apiRouter.post('/auth/logout', (req: Request, res: Response) => {
+  const authHeader = req.headers.authorization || (req.headers['x-auth-token'] as string);
+  let token = '';
+  if (authHeader) {
+    token = authHeader.startsWith('Bearer ') ? authHeader.substring(7).trim() : authHeader.trim();
+  }
+  authService.logout(token);
+  res.json({ success: true, message: 'Logout realizado com sucesso' });
+});
+
+// --- PROTECTED ROUTES BELOW ---
+apiRouter.use(requireAuth);
 
 // --- DASHBOARD & STATS ---
 apiRouter.get('/stats', async (req: Request, res: Response) => {
@@ -31,7 +104,6 @@ apiRouter.get('/stats', async (req: Request, res: Response) => {
 });
 
 // --- CRAWLER ---
-// Requirement 27: POST /api/crawler/run
 apiRouter.post('/crawler/run', async (req: Request, res: Response) => {
   try {
     const result = await crawler.run();
@@ -61,7 +133,7 @@ apiRouter.get('/products', async (req: Request, res: Response) => {
       products = products.filter(p => p.category === category);
     }
 
-    res.json({ success: true, products, total: products.length });
+    res.json({ success: true, products });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -80,25 +152,29 @@ apiRouter.get('/products/:id', async (req: Request, res: Response) => {
   }
 });
 
-apiRouter.post('/products/:id/generate-copy', async (req: Request, res: Response) => {
+// --- PUBLICATIONS & SCHEDULER ---
+apiRouter.get('/publications', async (req: Request, res: Response) => {
   try {
-    const product = await storage.getProductById(req.params.id);
-    if (!product) {
-      return res.status(404).json({ success: false, error: 'Produto não encontrado' });
-    }
-    const settings = await storage.getSettings();
-    const { content, affiliateUrl } = await contentService.generateCopyForProduct(product, settings.nvidia_model);
-    res.json({ success: true, content, affiliateUrl });
+    const status = req.query.status as string;
+    const publications = await storage.getPublications(status as any);
+    res.json({ success: true, publications });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
-// --- PUBLICATIONS & SCHEDULER ---
-apiRouter.get('/publications', async (req: Request, res: Response) => {
+apiRouter.post('/publications/generate-copy', async (req: Request, res: Response) => {
   try {
-    const publications = await storage.getPublications();
-    res.json({ success: true, publications });
+    const { productId } = req.body;
+    if (!productId) {
+      return res.status(400).json({ success: false, error: 'productId é obrigatório' });
+    }
+    const product = await storage.getProductById(productId);
+    if (!product) {
+      return res.status(404).json({ success: false, error: 'Produto não encontrado' });
+    }
+    const generated = await contentService.generateCopyForProduct(product);
+    res.json({ success: true, ...generated });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -108,15 +184,10 @@ apiRouter.post('/publications', async (req: Request, res: Response) => {
   try {
     const { product_id, scheduled_at, content, facebook_group_url } = req.body;
     if (!product_id || !scheduled_at || !content) {
-      return res.status(400).json({ success: false, error: 'Campos obrigatórios ausentes' });
+      return res.status(400).json({ success: false, error: 'Campos obrigatórios: product_id, scheduled_at, content' });
     }
 
-    // Validate affiliate link in content (Requirement 22)
-    if (!content.includes('/20889')) {
-      return res.status(400).json({ success: false, error: 'O conteúdo deve conter o link de afiliado terminando em /20889' });
-    }
-
-    const pub = await storage.createPublication({
+    const publication = await storage.createPublication({
       product_id,
       scheduled_at,
       status: 'scheduled',
@@ -124,7 +195,7 @@ apiRouter.post('/publications', async (req: Request, res: Response) => {
       facebook_group_url
     });
 
-    res.json({ success: true, publication: pub });
+    res.json({ success: true, publication });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -179,7 +250,7 @@ apiRouter.delete('/publications/:id', async (req: Request, res: Response) => {
   }
 });
 
-// Trigger daily 5-post batch generation (Requirement 20, 28)
+// Trigger daily 5-post batch generation (150/mês, 5/dia)
 apiRouter.post('/scheduler/batch-today', async (req: Request, res: Response) => {
   try {
     const { targetDate } = req.body;
@@ -207,8 +278,28 @@ apiRouter.get('/facebook/status', (req: Request, res: Response) => {
 
 apiRouter.post('/facebook/connect', async (req: Request, res: Response) => {
   try {
-    const { storageState } = req.body;
-    const result = await facebookService.setupFacebookSession(storageState);
+    const { sessionData } = req.body;
+    const result = await facebookService.connectSession(sessionData);
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+apiRouter.post('/facebook/verify-session', async (req: Request, res: Response) => {
+  try {
+    const isValid = await facebookService.verifySessionWithBrowser();
+    res.json({ success: isValid, status: facebookService.getStatus() });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+apiRouter.post('/facebook/verify-group', async (req: Request, res: Response) => {
+  try {
+    const settings = await storage.getSettings();
+    const groupUrl = req.body.groupUrl || settings.facebook_group_url;
+    const result = await facebookService.verifyGroupAccess(groupUrl);
     res.json(result);
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
@@ -218,31 +309,9 @@ apiRouter.post('/facebook/connect', async (req: Request, res: Response) => {
 apiRouter.post('/facebook/test-publish', async (req: Request, res: Response) => {
   try {
     const settings = await storage.getSettings();
-    const testPub = {
-      id: `test_${Date.now()}`,
-      product_id: 'test_product',
-      product: {
-        id: 'test_product',
-        product_identity_key: 'test',
-        product_name: 'Produto de Teste ForgeDeals',
-        original_url: 'https://www.lojadomecanico.com.br/produto/teste',
-        affiliate_url: 'https://www.lojadomecanico.com.br/produto/teste/20889',
-        current_price: 99.90,
-        active: true,
-        last_scraped_at: new Date().toISOString(),
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
-      },
-      scheduled_at: new Date().toISOString(),
-      status: 'publishing' as const,
-      content: `🔥 TESTE DE PUBLICAÇÃO FORGEDEALS\n\nFerramenta de alta precisão com preço imperdível!\nConfira: https://www.lojadomecanico.com.br/produto/teste/20889`,
-      facebook_group_url: settings.facebook_group_url,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString()
-    };
-
-    const result = await facebookService.publishSingle(testPub);
-    res.json({ success: result.success, postUrl: result.postUrl, error: result.error });
+    const groupUrl = req.body.groupUrl || settings.facebook_group_url;
+    const result = await facebookService.publishTest(groupUrl);
+    res.json(result);
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }

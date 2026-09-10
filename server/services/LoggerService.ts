@@ -47,6 +47,14 @@ class LoggerService {
     this.log('Facebook', message, level);
   }
 
+  supabase(message: string, level: LogEntry['level'] = 'info') {
+    this.log('Supabase', message, level);
+  }
+
+  auth(message: string, level: LogEntry['level'] = 'info') {
+    this.log('Auth', message, level);
+  }
+
   system(message: string, level: LogEntry['level'] = 'info') {
     this.log('System', message, level);
   }

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Terminal, Trash2, RefreshCw } from 'lucide-react';
+import { Terminal, RefreshCw } from 'lucide-react';
 import { LogEntry } from '../types';
 
 interface LogsTabProps {
@@ -12,22 +12,26 @@ export const LogsTab: React.FC<LogsTabProps> = ({ logs, onRefresh, isLoading }) 
   const getBadgeClass = (source: LogEntry['source']) => {
     switch (source) {
       case 'Crawler':
-        return 'bg-blue-50 text-blue-700 border-blue-200';
+        return 'bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20';
       case 'AI':
-        return 'bg-purple-50 text-purple-700 border-purple-200';
+        return 'bg-purple-500/10 text-purple-600 dark:text-purple-400 border-purple-500/20';
       case 'Scheduler':
-        return 'bg-orange-50 text-orange-700 border-orange-200';
+        return 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20';
       case 'Facebook':
-        return 'bg-indigo-50 text-indigo-700 border-indigo-200';
+        return 'bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border-indigo-500/20';
+      case 'Supabase':
+        return 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20';
+      case 'Auth':
+        return 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/20';
       default:
-        return 'bg-slate-50 text-slate-700 border-slate-200';
+        return 'bg-slate-500/10 text-slate-600 dark:text-slate-400 border-slate-500/20';
     }
   };
 
   const getLevelDot = (level: LogEntry['level']) => {
     switch (level) {
       case 'error':
-        return 'bg-red-500';
+        return 'bg-rose-500';
       case 'warn':
         return 'bg-amber-500';
       case 'success':
@@ -39,34 +43,34 @@ export const LogsTab: React.FC<LogsTabProps> = ({ logs, onRefresh, isLoading }) 
 
   return (
     <div className="space-y-4 max-w-5xl">
-      <div className="flex items-center justify-between bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
-        <div className="flex items-center space-x-2">
-          <Terminal className="w-5 h-5 text-slate-700" />
+      <div className="flex items-center justify-between bg-white dark:bg-slate-900 p-5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs transition-colors">
+        <div className="flex items-center gap-2.5">
+          <Terminal className="w-5 h-5 text-amber-500" />
           <div>
-            <h2 className="text-base font-bold text-slate-900">Console de Eventos Operacionais</h2>
-            <p className="text-xs text-slate-500">Rastreamento limpo de execução sem exposição de segredos (Regra 30)</p>
+            <h2 className="text-base font-bold text-slate-900 dark:text-white">Console de Eventos Operacionais</h2>
+            <p className="text-xs text-slate-500 dark:text-slate-400">Rastreamento limpo de execução sem exposição de segredos</p>
           </div>
         </div>
 
         <button
           onClick={onRefresh}
           disabled={isLoading}
-          className="inline-flex items-center space-x-1 px-3 py-1.5 text-xs font-semibold rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 transition-colors"
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 transition-colors disabled:opacity-40"
         >
-          <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin text-orange-600' : ''}`} />
+          <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin text-amber-500' : ''}`} />
           <span>Atualizar Logs</span>
         </button>
       </div>
 
-      <div className="bg-slate-900 text-slate-200 rounded-xl p-4 font-mono text-xs shadow-inner overflow-hidden border border-slate-800">
+      <div className="bg-slate-950 text-slate-200 rounded-2xl p-4 font-mono text-xs shadow-inner overflow-hidden border border-slate-800">
         <div className="space-y-2 max-h-[550px] overflow-y-auto pr-2">
           {logs.length === 0 ? (
-            <div className="py-8 text-center text-slate-500">
-              Nenhum log registrado ainda. Execute uma ação para visualizar o histórico de eventos.
+            <div className="py-12 text-center text-slate-500">
+              Nenhum log registrado ainda. Execute uma ação no painel para visualizar o histórico em tempo real.
             </div>
           ) : (
             logs.map(entry => (
-              <div key={entry.id} className="flex items-start space-x-3 hover:bg-slate-800/60 p-1.5 rounded transition-colors">
+              <div key={entry.id} className="flex items-start gap-3 hover:bg-slate-900 p-2 rounded-lg transition-colors">
                 <span className="text-slate-500 shrink-0 text-[11px]">
                   {new Date(entry.timestamp).toLocaleTimeString('pt-BR')}
                 </span>
@@ -75,9 +79,17 @@ export const LogsTab: React.FC<LogsTabProps> = ({ logs, onRefresh, isLoading }) 
                   [{entry.source}]
                 </span>
 
-                <div className="flex items-center space-x-2 flex-1 min-w-0">
+                <div className="flex items-center gap-2 flex-1 min-w-0">
                   <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${getLevelDot(entry.level)}`} />
-                  <span className={`break-all ${entry.level === 'error' ? 'text-red-400 font-semibold' : entry.level === 'warn' ? 'text-amber-400' : 'text-slate-200'}`}>
+                  <span className={`break-all ${
+                    entry.level === 'error'
+                      ? 'text-rose-400 font-semibold'
+                      : entry.level === 'warn'
+                      ? 'text-amber-400'
+                      : entry.level === 'success'
+                      ? 'text-emerald-400'
+                      : 'text-slate-300'
+                  }`}>
                     {entry.message}
                   </span>
                 </div>

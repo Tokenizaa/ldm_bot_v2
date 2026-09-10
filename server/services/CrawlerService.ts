@@ -1,5 +1,5 @@
 import * as cheerio from 'cheerio';
-import { Product, CrawlerRunResult } from '../types.js';
+import { CrawlerRunResult } from '../types.js';
 import { storage } from './StorageService.js';
 import { logger } from './LoggerService.js';
 import {
@@ -19,266 +19,234 @@ export interface RawScrapedProduct {
   url: string;
 }
 
-// Real curated catalog of genuine high-selling Loja do Mecânico tools with actual SKUs and real prices
-// Used for verified public catalog seed and fallback when bot protections challenge serverless IP
-const REAL_LOJA_DO_MECANICO_CATALOG: RawScrapedProduct[] = [
-  {
-    name: 'Furadeira e Parafusadeira de Impacto a Bateria 1/2 Pol 20V Max DCD7781D2 Dewalt',
-    current_price: 899.90,
-    previous_price: 1199.90,
-    brand: 'Dewalt',
-    category: 'Ferramentas Elétricas',
-    sku: 'DCD7781D2-BR',
-    image_url: 'https://images.lojadomecanico.com.br/imagens/1/524/115456/115456_detalhe.jpg',
-    url: 'https://www.lojadomecanico.com.br/produto/115456/1/524/furadeira-e-parafusadeira-de-impacto-a-bateria-12-pol-20v-dcd7781d2-dewalt'
-  },
-  {
-    name: 'Esmerilhadeira Angular 4.1/2 Pol 820W G720 Black & Decker 220V',
-    current_price: 249.90,
-    previous_price: 329.90,
-    brand: 'Black & Decker',
-    category: 'Ferramentas Elétricas',
-    sku: 'G720-B2',
-    image_url: 'https://images.lojadomecanico.com.br/imagens/1/524/1234/1234_detalhe.jpg',
-    url: 'https://www.lojadomecanico.com.br/produto/1234/1/524/esmerilhadeira-angular-4-12-pol-820w-g720-black-decker'
-  },
-  {
-    name: 'Jogo de Chaves Soquetes e Catraca 1/2 e 1/4 Pol com 110 Peças Vonder',
-    current_price: 489.00,
-    previous_price: 599.00,
-    brand: 'Vonder',
-    category: 'Ferramentas Manuais',
-    sku: '3599110000',
-    image_url: 'https://images.lojadomecanico.com.br/imagens/1/525/4567/4567_detalhe.jpg',
-    url: 'https://www.lojadomecanico.com.br/produto/4567/1/525/jogo-de-soquetes-e-chaves-com-110-pecas-vonder'
-  },
-  {
-    name: 'Máquina de Solda Inversora 140A Touch 150 Bivolt Boxer',
-    current_price: 679.90,
-    previous_price: 849.90,
-    brand: 'Boxer',
-    category: 'Solda',
-    sku: 'BOXER-TOUCH150',
-    image_url: 'https://images.lojadomecanico.com.br/imagens/1/526/8912/8912_detalhe.jpg',
-    url: 'https://www.lojadomecanico.com.br/produto/8912/1/526/inversora-de-solda-140a-touch-150-boxer'
-  },
-  {
-    name: 'Lavadora de Alta Pressão K2 Plus 1740 PSI 1400W Karcher',
-    current_price: 499.90,
-    previous_price: 629.90,
-    brand: 'Karcher',
-    category: 'Lavadoras e Limpeza',
-    sku: 'K2PLUS-1400',
-    image_url: 'https://images.lojadomecanico.com.br/imagens/1/527/1598/1598_detalhe.jpg',
-    url: 'https://www.lojadomecanico.com.br/produto/1598/1/527/lavadora-de-alta-pressao-k2-plus-karcher'
-  },
-  {
-    name: 'Macaco Hidráulico Tipo Jacaré 2 Toneladas com Maleta Sparta',
-    current_price: 219.90,
-    previous_price: 289.90,
-    brand: 'Sparta',
-    category: 'Mecânica Automotiva',
-    sku: 'SPARTA-5100855',
-    image_url: 'https://images.lojadomecanico.com.br/imagens/1/528/7731/7731_detalhe.jpg',
-    url: 'https://www.lojadomecanico.com.br/produto/7731/1/528/macaco-hidraulico-jacare-2-toneladas-sparta'
-  },
-  {
-    name: 'Compressor de Ar Direto Bivolt com Kit Pintura Chiaperini',
-    current_price: 849.00,
-    previous_price: 1049.00,
-    brand: 'Chiaperini',
-    category: 'Compressores e Ar Comprimido',
-    sku: 'CHIAP-AR-DIRETO',
-    image_url: 'https://images.lojadomecanico.com.br/imagens/1/529/3321/3321_detalhe.jpg',
-    url: 'https://www.lojadomecanico.com.br/produto/3321/1/529/compressor-ar-direto-chiaperini'
-  },
-  {
-    name: 'Serra Tico-Tico 500W com Guia Laser Philco 127V',
-    current_price: 179.90,
-    previous_price: 239.90,
-    brand: 'Philco',
-    category: 'Ferramentas Elétricas',
-    sku: 'PHILCO-STT500',
-    image_url: 'https://images.lojadomecanico.com.br/imagens/1/524/9910/9910_detalhe.jpg',
-    url: 'https://www.lojadomecanico.com.br/produto/9910/1/524/serra-tico-tico-500w-com-laser-philco'
-  },
-  {
-    name: 'Torquímetro de Estalo 1/2 Pol 28 a 210 Nm com Estojo King Tony',
-    current_price: 369.90,
-    previous_price: 459.90,
-    brand: 'King Tony',
-    category: 'Mecânica Automotiva',
-    sku: '34423-1A',
-    image_url: 'https://images.lojadomecanico.com.br/imagens/1/528/1122/1122_detalhe.jpg',
-    url: 'https://www.lojadomecanico.com.br/produto/1122/1/528/torquimetro-de-estalo-12-king-tony'
-  },
-  {
-    name: 'Jogo de Chaves Combinadas Catraca 8 a 19 mm 7 Peças Gedore Red',
-    current_price: 299.90,
-    previous_price: 379.90,
-    brand: 'Gedore Red',
-    category: 'Ferramentas Manuais',
-    sku: 'R07105007',
-    image_url: 'https://images.lojadomecanico.com.br/imagens/1/525/6644/6644_detalhe.jpg',
-    url: 'https://www.lojadomecanico.com.br/produto/6644/1/525/jogo-chaves-combinadas-catraca-gedore-red'
-  }
-];
-
 export class CrawlerService {
+  private defaultHeaders = {
+    'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7'
+  };
+
   /**
-   * Parses JSON-LD Product schema from HTML (Requirement 6: Priorizar JSON-LD)
+   * Fetches an HTML page with timeout and standard indexing headers
    */
-  extractJsonLdProducts(html: string): RawScrapedProduct[] {
-    const products: RawScrapedProduct[] = [];
+  private async fetchPage(url: string, timeoutMs = 12000): Promise<string> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+      const response = await fetch(url, {
+        signal: controller.signal,
+        headers: this.defaultHeaders
+      });
+
+      clearTimeout(timer);
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status} ao acessar ${url}`);
+      }
+
+      return await response.text();
+    } catch (err: any) {
+      clearTimeout(timer);
+      throw err;
+    }
+  }
+
+  /**
+   * Extracts Product Schema JSON-LD from HTML
+   */
+  extractJsonLdProduct(html: string, pageUrl: string): RawScrapedProduct | null {
     const $ = cheerio.load(html);
+    let foundProduct: RawScrapedProduct | null = null;
 
     $('script[type="application/ld+json"]').each((_, el) => {
+      if (foundProduct) return;
       try {
         const rawContent = $(el).html();
         if (!rawContent) return;
         const parsed = JSON.parse(rawContent);
-
         const items = Array.isArray(parsed) ? parsed : [parsed];
+
         for (const item of items) {
           if (item['@type'] === 'Product') {
-            const price = parseFloat(
-              item.offers?.price || item.offers?.lowPrice || item.offers?.highPrice || '0'
-            );
-            const rawUrl = item.offers?.url || item.url || '';
+            const rawPrice = item.offers?.price || item.offers?.lowPrice || item.offers?.highPrice;
+            const price = typeof rawPrice === 'number' ? rawPrice : parseFloat(String(rawPrice || '0').replace(',', '.'));
+            const name = item.name?.trim();
+            const rawUrl = item.offers?.url || item.url || pageUrl;
 
-            if (item.name && price > 0 && rawUrl) {
-              products.push({
-                name: item.name.trim(),
+            if (name && price > 0) {
+              const brand = typeof item.brand === 'object' ? item.brand?.name : item.brand;
+              const imageUrl = Array.isArray(item.image) ? item.image[0] : item.image;
+              const sku = item.sku || item.mpn || item.productId;
+
+              foundProduct = {
+                name,
                 current_price: price,
-                brand: typeof item.brand === 'object' ? item.brand?.name : item.brand,
-                category: item.category,
-                sku: item.sku || item.mpn,
-                image_url: Array.isArray(item.image) ? item.image[0] : item.image,
+                brand: brand ? String(brand).trim() : undefined,
+                category: item.category ? String(item.category).trim() : undefined,
+                sku: sku ? String(sku).trim() : undefined,
+                image_url: imageUrl ? String(imageUrl).trim() : undefined,
                 url: rawUrl
-              });
+              };
+              return false; // break loop
             }
           }
         }
       } catch {
-        // Skip invalid JSON-LD scripts
+        // Skip malformed JSON-LD scripts
       }
     });
 
-    return products;
+    return foundProduct;
   }
 
   /**
-   * Fallback DOM extraction for Loja do Mecânico product cards
+   * DOM fallback extraction when JSON-LD is unavailable
    */
-  extractDomProducts(html: string, baseUrl: string): RawScrapedProduct[] {
-    const products: RawScrapedProduct[] = [];
+  extractDomProduct(html: string, pageUrl: string): RawScrapedProduct | null {
     const $ = cheerio.load(html);
 
-    // Look for product cards across typical e-commerce class structures
-    $('div[data-product-id], div.product-card, .product-item, .card-product, article').each((_, el) => {
-      try {
-        const name = $(el).find('h2, h3, .product-title, .title, [data-testid="product-name"]').first().text().trim();
-        const priceText = $(el).find('.price, .product-price, [data-testid="price"], strong').first().text().trim();
-        const link = $(el).find('a[href*="/produto/"]').first().attr('href');
-        const img = $(el).find('img').first().attr('src') || $(el).find('img').first().attr('data-src');
-        const sku = $(el).attr('data-sku') || $(el).find('.sku').text().trim();
+    const title = $('meta[property="og:title"]').attr('content') ||
+                  $('h1.product-title, h1[data-testid="product-title"], h1').first().text().trim();
+    const image = $('meta[property="og:image"]').attr('content') ||
+                  $('.product-image img, [data-testid="product-image"]').first().attr('src');
 
-        if (name && link && priceText) {
-          const cleanPrice = parseFloat(
-            priceText.replace(/[^0-9,.]/g, '').replace('.', '').replace(',', '.')
-          );
+    // Price extraction
+    let price = 0;
+    const metaPrice = $('meta[property="product:price:amount"]').attr('content');
+    if (metaPrice) {
+      price = parseFloat(metaPrice.replace(',', '.'));
+    } else {
+      const priceText = $('.preco-avista, .price, .product-price, [data-testid="price"]').first().text().trim();
+      if (priceText) {
+        price = parseFloat(priceText.replace(/[^0-9,.]/g, '').replace('.', '').replace(',', '.'));
+      }
+    }
 
-          if (cleanPrice > 0) {
-            const fullUrl = link.startsWith('http') ? link : new URL(link, baseUrl).toString();
-            products.push({
-              name,
-              current_price: cleanPrice,
-              sku: sku || undefined,
-              image_url: img,
-              url: fullUrl
-            });
-          }
-        }
-      } catch {}
-    });
+    if (!title || price <= 0) {
+      return null;
+    }
 
-    return products;
+    const sku = $('[data-sku]').attr('data-sku') || $('.product-sku, .sku').first().text().replace(/[^0-9A-Za-z-]/g, '').trim();
+    const brand = $('[data-brand]').attr('data-brand') || $('.product-brand, .brand').first().text().trim();
+
+    return {
+      name: title,
+      current_price: price,
+      brand: brand || undefined,
+      sku: sku || undefined,
+      image_url: image || undefined,
+      url: pageUrl
+    };
   }
 
   /**
-   * Fetches and parses a single URL
+   * Collects genuine product URLs from index/category pages
    */
-  async scrapeUrl(targetUrl: string): Promise<RawScrapedProduct[]> {
+  extractProductUrlsFromListing(html: string): string[] {
+    const urls = new Set<string>();
+    const matches = [...html.matchAll(/href=["'](\/produto\/[0-9]+[^"']*)["']/gi)];
+
+    for (const match of matches) {
+      const path = match[1];
+      if (path && !path.includes('/carrinho') && !path.includes('/checkout')) {
+        const full = path.startsWith('http')
+          ? path
+          : `https://www.lojadomecanico.com.br${path.startsWith('/') ? '' : '/'}${path}`;
+        urls.add(full);
+      }
+    }
+
+    // Also look for absolute URLs in html
+    const absMatches = [...html.matchAll(/https:\/\/www\.lojadomecanico\.com\.br\/produto\/[0-9]+[^\s"']+/gi)];
+    for (const match of absMatches) {
+      urls.add(match[0]);
+    }
+
+    return Array.from(urls);
+  }
+
+  /**
+   * Scrapes a single real product by its Loja do Mecânico URL
+   */
+  async scrapeProductPage(url: string): Promise<RawScrapedProduct | null> {
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 8000);
-
-      const response = await fetch(targetUrl, {
-        signal: controller.signal,
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-          'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7'
-        }
-      });
-      clearTimeout(timeoutId);
-
-      if (!response.ok) {
-        return [];
+      const html = await this.fetchPage(url);
+      const jsonLd = this.extractJsonLdProduct(html, url);
+      if (jsonLd) {
+        return jsonLd;
       }
-
-      const html = await response.text();
-
-      // Prioritize JSON-LD
-      const jsonLdProducts = this.extractJsonLdProducts(html);
-      if (jsonLdProducts.length > 0) {
-        return jsonLdProducts;
-      }
-
-      // Fallback to DOM
-      return this.extractDomProducts(html, targetUrl);
-    } catch {
-      return [];
+      return this.extractDomProduct(html, url);
+    } catch (err: any) {
+      logger.crawler(`Falha ao raspar página de produto individual (${url}): ${err.message}`, 'warn');
+      return null;
     }
   }
 
   /**
-   * Requirement 27: POST /api/crawler/run
-   * Returns: { found, valid, new, updated }
-   * Enforces Idempotency (Requirement 32) and Price History (Requirement 18)
+   * Runs the REAL crawler against Loja do Mecânico.
+   * ZERO hardcoded catalog.
+   * ZERO fake fallback.
+   * If scraping fails to find real products, throws an error.
    */
   async run(): Promise<CrawlerRunResult> {
-    logger.crawler('Started');
+    logger.crawler('Started: Conectando diretamente à Loja do Mecânico (https://www.lojadomecanico.com.br)...');
 
-    const settings = await storage.getSettings();
-    const candidateProducts: RawScrapedProduct[] = [];
+    const listingUrls = [
+      'https://www.lojadomecanico.com.br/',
+      'https://www.lojadomecanico.com.br/categoria/ferramentas-eletricas',
+      'https://www.lojadomecanico.com.br/categoria/ferramentas-manuais'
+    ];
 
-    // Attempt scraping configured target URLs
-    const targetUrls = settings.crawler_target_urls && settings.crawler_target_urls.length > 0
-      ? settings.crawler_target_urls
-      : ['https://www.lojadomecanico.com.br/categoria/ferramentas-eletricas'];
+    const discoveredProductUrls = new Set<string>();
 
-    for (const url of targetUrls) {
-      const scraped = await this.scrapeUrl(url);
-      if (scraped.length > 0) {
-        candidateProducts.push(...scraped);
+    for (const listUrl of listingUrls) {
+      try {
+        logger.crawler(`Acessando catálogo: ${listUrl}`);
+        const html = await this.fetchPage(listUrl);
+        const extracted = this.extractProductUrlsFromListing(html);
+        extracted.forEach(u => discoveredProductUrls.add(u));
+        logger.crawler(`Encontradas ${extracted.length} URLs de produtos em ${listUrl}`);
+      } catch (err: any) {
+        logger.crawler(`Aviso ao acessar ${listUrl}: ${err.message}`, 'warn');
       }
     }
 
-    // If live HTTP responses were challenged by edge firewall, merge genuine Loja do Mecânico catalog
-    if (candidateProducts.length === 0) {
-      candidateProducts.push(...REAL_LOJA_DO_MECANICO_CATALOG);
+    const candidateUrls = Array.from(discoveredProductUrls);
+
+    if (candidateUrls.length === 0) {
+      const errorMsg = 'Crawler da Loja do Mecânico falhou: nenhuma URL de produto encontrada nas páginas oficiais.';
+      logger.crawler(errorMsg, 'error');
+      throw new Error(errorMsg);
     }
 
-    logger.crawler(`Found ${candidateProducts.length} products`);
+    logger.crawler(`Total de ${candidateUrls.length} produtos descobertos. Extraindo detalhes reais...`);
+
+    // Scrape up to 15 real products per run
+    const targetSlice = candidateUrls.slice(0, 15);
+    const scrapedProducts: RawScrapedProduct[] = [];
+
+    for (const prodUrl of targetSlice) {
+      const prod = await this.scrapeProductPage(prodUrl);
+      if (prod) {
+        scrapedProducts.push(prod);
+      }
+    }
+
+    if (scrapedProducts.length === 0) {
+      const errorMsg = 'Crawler falhou: não foi possível extrair dados válidos de nenhum dos produtos encontrados.';
+      logger.crawler(errorMsg, 'error');
+      throw new Error(errorMsg);
+    }
+
+    logger.crawler(`Found ${scrapedProducts.length} products reais`);
 
     let validCount = 0;
     let newCount = 0;
     let updatedCount = 0;
 
-    for (const raw of candidateProducts) {
-      // Requirement 6: Valid product criteria
-      // product_name != null, original_url != null, current_price > 0
+    for (const raw of scrapedProducts) {
+      // Requisito 2: Aceitar somente product_name != null, original_url != null, current_price > 0
       if (!raw.name || !raw.url || !raw.current_price || raw.current_price <= 0) {
         continue;
       }
@@ -287,6 +255,13 @@ export class CrawlerService {
 
       const originalUrl = normalizeProductUrl(raw.url);
       const affiliateUrl = buildAffiliateUrl(originalUrl);
+
+      // Requisito 3: Garantir affiliate_url.endsWith("/20889") antes de salvar
+      if (!affiliateUrl.endsWith('/20889')) {
+        logger.crawler(`URL de afiliado inválida para "${raw.name}": ${affiliateUrl}`, 'error');
+        continue;
+      }
+
       const identityKey = generateProductIdentityKey(raw.sku, originalUrl, raw.name);
 
       const productPayload = {
@@ -311,16 +286,17 @@ export class CrawlerService {
       } else {
         updatedCount++;
         if (result.priceChanged) {
-          logger.crawler(`Price changed for "${raw.name}": R$ ${raw.current_price.toFixed(2)}`);
+          logger.crawler(`Preço atualizado para "${raw.name}": R$ ${raw.current_price.toFixed(2)}`);
         }
       }
     }
 
     logger.crawler(`${validCount} valid`);
     logger.crawler(`${newCount} new`);
+    logger.crawler(`${updatedCount} updated`);
 
     return {
-      found: candidateProducts.length,
+      found: scrapedProducts.length,
       valid: validCount,
       new: newCount,
       updated: updatedCount

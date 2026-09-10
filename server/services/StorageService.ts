@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import { Product, Publication, PriceHistory, AppSettings, OperationalQuota, DashboardStats } from '../types.js';
+import { Product, Publication, PublicationStatus, PriceHistory, AppSettings, OperationalQuota, DashboardStats } from '../types.js';
 import { logger } from './LoggerService.js';
 
 interface DatabaseData {
@@ -259,14 +259,20 @@ export class StorageService {
   }
 
   // --- PUBLICATIONS ---
-  async getPublications(): Promise<Publication[]> {
+  async getPublications(status?: PublicationStatus): Promise<Publication[]> {
     let pubs: Publication[] = [];
     if (this.supabase && this.isSupabaseConnected) {
       try {
-        const { data, error } = await this.supabase
+        let query = this.supabase
           .from('publications')
           .select('*, products(*)')
           .order('scheduled_at', { ascending: false });
+
+        if (status) {
+          query = query.eq('status', status);
+        }
+
+        const { data, error } = await query;
         if (!error && data) {
           pubs = data.map((d: any) => ({
             ...d,
@@ -277,7 +283,11 @@ export class StorageService {
     }
 
     if (pubs.length === 0) {
-      pubs = this.data.publications.map(pub => ({
+      let localPubs = this.data.publications;
+      if (status) {
+        localPubs = localPubs.filter(p => p.status === status);
+      }
+      pubs = localPubs.map(pub => ({
         ...pub,
         product: this.data.products.find(p => p.id === pub.product_id)
       }));
@@ -465,6 +475,10 @@ export class StorageService {
 
   isSupabaseActive(): boolean {
     return this.isSupabaseConnected;
+  }
+
+  getSupabaseClient(): SupabaseClient | null {
+    return this.supabase;
   }
 }
 
