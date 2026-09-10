@@ -1,0 +1,6 @@
+{
+  "name": "ForgeDeals",
+  "description": "Automação de ofertas da Loja do Mecânico com NVIDIA AI, agendamento de 150 posts/mês e publicação no Facebook Group.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
