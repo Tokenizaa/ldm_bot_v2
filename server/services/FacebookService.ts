@@ -1,125 +1,201 @@
 import fs from 'fs';
 import path from 'path';
 import { chromium, BrowserContext, Page } from 'playwright';
-import { FacebookSessionStatus, Publication } from '../types.js';
+import { Publication, FacebookSessionStatus } from '../types.js';
 import { logger } from './LoggerService.js';
 import { storage } from './StorageService.js';
 
+/**
+ * Facebook browser policy:
+ * - The persistent Playwright user-data directory is the ONLY session source of truth.
+ * - storageState.json/cookie injection is deliberately not used.
+ * - Credentials and 2FA are always entered manually by the operator when Facebook asks.
+ * - The application never closes the context during normal operation.
+ * - One FacebookService instance owns one persistent context and serializes connection attempts.
+ */
 export class FacebookService {
   private readonly profileDir: string;
-  private readonly stateFilePath: string;
   private sessionStatus: FacebookSessionStatus;
   private browserContext: BrowserContext | null = null;
+  private contextPromise: Promise<BrowserContext> | null = null;
+  private connectPromise: Promise<{ success: boolean; message: string; connectedUser?: string }> | null = null;
 
   constructor() {
     this.profileDir = path.join(process.cwd(), 'data', 'browser-profiles', 'facebook');
     fs.mkdirSync(this.profileDir, { recursive: true });
-    this.stateFilePath = path.join(this.profileDir, 'storageState.json');
     this.sessionStatus = {
       connected: false,
       status: 'disconnected',
       profile_dir: 'data/browser-profiles/facebook',
-      details: 'Facebook desconectado. Clique em Conectar Facebook para abrir o navegador.'
+      details: 'Perfil persistente do Facebook configurado. A sessão será validada quando o navegador for aberto.'
     };
-    this.checkSavedSession();
   }
 
-  private checkSavedSession() {
-    try {
-      if (!fs.existsSync(this.stateFilePath)) return;
-      const state = JSON.parse(fs.readFileSync(this.stateFilePath, 'utf8'));
-      const hasAuthCookie = Array.isArray(state.cookies) && state.cookies.some((c: any) =>
-        (c.name === 'c_user' || c.name === 'xs') && String(c.domain || '').includes('facebook.com')
-      );
-      if (!hasAuthCookie) return;
-      const cUser = state.cookies.find((c: any) => c.name === 'c_user');
-      this.sessionStatus = {
-        connected: true,
-        status: 'connected',
-        connected_user: cUser?.value ? `Facebook ID: ${cUser.value}` : 'Conta conectada',
-        last_authenticated_at: new Date(fs.statSync(this.stateFilePath).mtime).toISOString(),
-        profile_dir: 'data/browser-profiles/facebook',
-        details: 'Sessão persistida encontrada. Será validada no Facebook antes da publicação.'
-      };
-    } catch {
-      this.sessionStatus.connected = false;
-      this.sessionStatus.status = 'requires_reauth';
-    }
+  getStatus(): FacebookSessionStatus {
+    return { ...this.sessionStatus };
   }
 
-  getStatus(): FacebookSessionStatus { return this.sessionStatus; }
-
-  private async getOrCreateBrowserContext(headless: boolean): Promise<BrowserContext> {
+  private async getOrCreateBrowserContext(): Promise<BrowserContext> {
     if (this.browserContext) return this.browserContext;
-    this.browserContext = await chromium.launchPersistentContext(this.profileDir, {
-      headless,
-      viewport: { width: 1280, height: 800 },
-      args: ['--no-sandbox', '--disable-setuid-sandbox']
-    });
-    this.browserContext.on('close', () => { this.browserContext = null; });
-    return this.browserContext;
+    if (this.contextPromise) return this.contextPromise;
+
+    this.contextPromise = (async () => {
+      try {
+        const context = await chromium.launchPersistentContext(this.profileDir, {
+          // Use the user's installed Chrome channel rather than Playwright's disposable Chromium.
+          // This does NOT reuse the user's everyday Chrome profile; profileDir remains isolated.
+          channel: process.env.FACEBOOK_BROWSER_CHANNEL || 'chrome',
+          headless: process.env.FACEBOOK_HEADLESS === 'true',
+          viewport: { width: 1280, height: 800 },
+          args: ['--no-sandbox', '--disable-setuid-sandbox']
+        });
+
+        this.browserContext = context;
+        context.on('close', () => {
+          this.browserContext = null;
+          this.contextPromise = null;
+          logger.facebook('Contexto persistente do Facebook foi encerrado.', 'warn');
+          if (this.sessionStatus.connected) {
+            this.sessionStatus.details = 'Navegador encerrado; a sessão permanece no perfil persistente e será reutilizada na próxima abertura.';
+          }
+        });
+
+        return context;
+      } catch (error) {
+        this.contextPromise = null;
+        throw error;
+      }
+    })();
+
+    return this.contextPromise;
+  }
+
+  private async getWorkingPage(context: BrowserContext): Promise<Page> {
+    const pages = context.pages();
+    return pages[0] || context.newPage();
+  }
+
+  private async waitForManualAuthentication(page: Page): Promise<boolean> {
+    const deadline = Date.now() + 5 * 60 * 1000;
+    while (Date.now() < deadline) {
+      if (await this.checkPageLoginStatus(page)) return true;
+      await new Promise(resolve => setTimeout(resolve, 3000));
+    }
+    return false;
   }
 
   async ensureFacebookSession(): Promise<boolean> {
-    if (!this.sessionStatus.connected && !fs.existsSync(this.stateFilePath)) return false;
     try {
-      const context = await this.getOrCreateBrowserContext(process.env.FACEBOOK_HEADLESS === 'true');
-      const page = context.pages()[0] || await context.newPage();
+      const context = await this.getOrCreateBrowserContext();
+      const page = await this.getWorkingPage(context);
       await page.goto('https://www.facebook.com', { waitUntil: 'domcontentloaded', timeout: 30000 });
+
       const loggedIn = await this.checkPageLoginStatus(page);
       if (!loggedIn) {
         this.sessionStatus = {
           connected: false,
           status: 'requires_reauth',
           profile_dir: 'data/browser-profiles/facebook',
-          details: 'Sessão expirada ou Facebook solicitou nova autenticação.'
+          details: 'O perfil persistente existe, mas o Facebook está solicitando autenticação novamente.'
         };
         return false;
       }
-      this.sessionStatus.connected = true;
-      this.sessionStatus.status = 'connected';
-      this.sessionStatus.last_authenticated_at = new Date().toISOString();
+
+      this.sessionStatus = {
+        ...this.sessionStatus,
+        connected: true,
+        status: 'connected',
+        connected_user: this.sessionStatus.connected_user || 'Conta Facebook autenticada',
+        last_authenticated_at: new Date().toISOString(),
+        details: 'Sessão ativa no perfil persistente do Facebook.'
+      };
       return true;
     } catch (err: any) {
       logger.facebook(`Falha ao validar sessão: ${err.message}`, 'error');
-      this.sessionStatus.connected = false;
-      this.sessionStatus.status = 'requires_reauth';
+      this.sessionStatus = {
+        ...this.sessionStatus,
+        connected: false,
+        status: 'requires_reauth',
+        details: `Não foi possível validar o perfil persistente: ${err.message}`
+      };
       return false;
     }
   }
 
   async connectSession(): Promise<{ success: boolean; message: string; connectedUser?: string }> {
-    logger.facebook('Abrindo Chrome persistente para login manual do Facebook. O usuário deverá concluir o 2FA.');
+    if (this.connectPromise) return this.connectPromise;
+
+    this.connectPromise = this.connectSessionInternal();
     try {
-      const context = await this.getOrCreateBrowserContext(process.env.FACEBOOK_HEADLESS === 'true');
-      const page = context.pages()[0] || await context.newPage();
+      return await this.connectPromise;
+    } finally {
+      this.connectPromise = null;
+    }
+  }
+
+  private async connectSessionInternal(): Promise<{ success: boolean; message: string; connectedUser?: string }> {
+    logger.facebook('Abrindo Chrome persistente com o perfil dedicado do Facebook. Nenhuma credencial será automatizada.');
+
+    try {
+      const context = await this.getOrCreateBrowserContext();
+      const page = await this.getWorkingPage(context);
       await page.goto('https://www.facebook.com', { waitUntil: 'domcontentloaded', timeout: 30000 });
 
       if (await this.checkPageLoginStatus(page)) {
-        await context.storageState({ path: this.stateFilePath });
-        this.checkSavedSession();
-        return { success: true, message: 'Facebook já estava autenticado. Sessão persistida e navegador reutilizável.', connectedUser: this.sessionStatus.connected_user };
+        this.sessionStatus = {
+          ...this.sessionStatus,
+          connected: true,
+          status: 'connected',
+          connected_user: 'Conta Facebook autenticada',
+          last_authenticated_at: new Date().toISOString(),
+          details: 'Sessão já autenticada no perfil persistente. Não é necessário novo login.'
+        };
+        return { success: true, message: 'Facebook já está autenticado no perfil persistente. Nenhum novo login foi executado.', connectedUser: this.sessionStatus.connected_user };
       }
 
       if (process.env.FACEBOOK_HEADLESS === 'true') {
-        return { success: false, message: 'FACEBOOK_HEADLESS=true impede login manual. Remova a variável ou defina false para abrir o Chrome.' };
+        return { success: false, message: 'FACEBOOK_HEADLESS=true impede autenticação manual. Use false para a primeira autenticação do perfil.' };
       }
 
-      const deadline = Date.now() + 5 * 60 * 1000;
-      while (Date.now() < deadline) {
-        await new Promise(resolve => setTimeout(resolve, 3000));
-        if (await this.checkPageLoginStatus(page)) {
-          await context.storageState({ path: this.stateFilePath });
-          this.checkSavedSession();
-          logger.facebook('Login e 2FA concluídos. O mesmo contexto do Chrome permanecerá aberto para o lote.');
-          return { success: true, message: 'Login e 2FA concluídos. Sessão persistida; o navegador será reutilizado.', connectedUser: this.sessionStatus.connected_user };
-        }
+      this.sessionStatus = {
+        ...this.sessionStatus,
+        connected: false,
+        status: 'connecting',
+        details: 'Aguardando autenticação manual no Facebook. Conclua login e 2FA no navegador aberto.'
+      };
+
+      const authenticated = await this.waitForManualAuthentication(page);
+      if (!authenticated) {
+        this.sessionStatus = {
+          ...this.sessionStatus,
+          connected: false,
+          status: 'requires_reauth',
+          details: 'Tempo limite aguardando autenticação manual no Facebook.'
+        };
+        return { success: false, message: 'Tempo limite de 5 minutos aguardando login/2FA no Facebook.' };
       }
 
-      return { success: false, message: 'Tempo limite de 5 minutos excedido aguardando login/2FA no Facebook.' };
+      // Do NOT close the context and do NOT export cookies/state. The persistent profile
+      // has already received the authenticated browser state and will be reused on restart.
+      this.sessionStatus = {
+        ...this.sessionStatus,
+        connected: true,
+        status: 'connected',
+        connected_user: 'Conta Facebook autenticada',
+        last_authenticated_at: new Date().toISOString(),
+        details: 'Login e 2FA concluídos. O perfil persistente continuará sendo usado automaticamente.'
+      };
+      logger.facebook('Login e 2FA concluídos. Contexto persistente mantido aberto e sessão gravada no perfil do navegador.');
+      return { success: true, message: 'Login e 2FA concluídos. A sessão ficará disponível no perfil persistente sem novo login em cada execução.', connectedUser: this.sessionStatus.connected_user };
     } catch (err: any) {
-      logger.facebook(`Erro ao abrir Chrome: ${err.message}`, 'error');
-      return { success: false, message: `Não foi possível abrir o Chrome: ${err.message}` };
+      logger.facebook(`Erro ao abrir Chrome persistente: ${err.message}`, 'error');
+      this.sessionStatus = {
+        ...this.sessionStatus,
+        connected: false,
+        status: 'requires_reauth',
+        details: `Erro no navegador persistente: ${err.message}`
+      };
+      return { success: false, message: `Não foi possível abrir o Chrome persistente: ${err.message}` };
     }
   }
 
@@ -132,8 +208,8 @@ export class FacebookService {
     if (!(await this.ensureFacebookSession())) return { accessible: false, message: 'Sessão do Facebook não autenticada.' };
 
     try {
-      const context = await this.getOrCreateBrowserContext(process.env.FACEBOOK_HEADLESS === 'true');
-      const page = context.pages()[0] || await context.newPage();
+      const context = await this.getOrCreateBrowserContext();
+      const page = await this.getWorkingPage(context);
       await page.goto(groupUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
       await page.waitForTimeout(2000);
       const url = page.url();
@@ -156,7 +232,12 @@ export class FacebookService {
     try {
       const url = page.url();
       if (/\/login|\/checkpoint|\/recover/i.test(url)) return false;
-      const authIndicator = await page.locator('[aria-label="Facebook"], [role="feed"], [aria-label*="Criar publicação"], [aria-label*="Sua conta"], [aria-label*="Conta"]').count();
+
+      // Prefer positive authenticated signals and reject the login form explicitly.
+      const loginForm = await page.locator('input[name="email"], input[name="pass"], form[action*="login"]').count();
+      if (loginForm > 0) return false;
+
+      const authIndicator = await page.locator('[role="feed"], [aria-label*="Criar publicação"], [aria-label*="Escreva algo"], [aria-label*="Sua conta"], [aria-label*="Conta"] , [href*="/profile.php"], [href*="/me/"]').count();
       return authIndicator > 0;
     } catch {
       return false;
@@ -173,8 +254,8 @@ export class FacebookService {
     if (!group.accessible) return { success: false, error: group.message };
 
     try {
-      const context = await this.getOrCreateBrowserContext(process.env.FACEBOOK_HEADLESS === 'true');
-      const page = context.pages()[0] || await context.newPage();
+      const context = await this.getOrCreateBrowserContext();
+      const page = await this.getWorkingPage(context);
       await page.goto(targetGroupUrl, { waitUntil: 'domcontentloaded', timeout: 35000 });
       await page.waitForTimeout(1500);
 
@@ -224,8 +305,8 @@ export class FacebookService {
   async publishTest(groupUrl: string): Promise<{ success: boolean; postUrl?: string; error?: string }> {
     if (!groupUrl) return { success: false, error: 'Grupo não configurado.' };
     if (!(await this.ensureFacebookSession())) return { success: false, error: 'Facebook requer autenticação.' };
-    const context = await this.getOrCreateBrowserContext(process.env.FACEBOOK_HEADLESS === 'true');
-    const page = context.pages()[0] || await context.newPage();
+    const context = await this.getOrCreateBrowserContext();
+    const page = await this.getWorkingPage(context);
     await page.goto(groupUrl, { waitUntil: 'domcontentloaded', timeout: 35000 });
     const testContent = `FORGEDEALS — TESTE DE CONEXÃO\n\nEsta é uma publicação de teste solicitada pelo operador. Não representa uma oferta comercial.`;
     const trigger = page.locator('[role="button"]:has-text("Escreva algo"), [aria-label*="Criar uma publicação"], [aria-label*="Escreva algo"]').first();
