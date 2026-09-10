@@ -30,7 +30,7 @@ export class FacebookService {
 
   constructor() {
     this.profileDir = path.join(process.cwd(), 'data', 'browser-profiles', 'facebook');
-    fs.mkdirSync(this.profileDir, { recursive: true });
+    if (!fs.existsSync(this.profileDir)) throw new Error('Perfil persistente do Facebook não existe: data/browser-profiles/facebook. NÃO recrie nem apague o perfil automaticamente.');
     this.sessionStatus = {
       connected: false,
       status: 'disconnected',
@@ -71,10 +71,26 @@ export class FacebookService {
   private async checkPageLoginStatus(page: Page): Promise<boolean> {
     try {
       if (/\/login|\/checkpoint|\/recover/i.test(page.url())) return false;
+
+      // O indicador primário da sessão é o cookie persistente do próprio Facebook.
+      // Não dependemos de textos/aria-labels que mudam com frequência na UI.
+      const cookies = await page.context().cookies('https://www.facebook.com');
+      const hasSessionCookies =
+        cookies.some(c => c.name === 'c_user' && !!c.value) &&
+        cookies.some(c => c.name === 'xs' && !!c.value);
+
+      if (hasSessionCookies) return true;
+
+      // Fallback visual somente quando os cookies não forem suficientes.
       const loginForm = await page.locator('input[name="email"], input[name="pass"], form[action*="login"]').count();
       if (loginForm > 0) return false;
-      return await page.locator('[role="feed"], [aria-label*="Criar publicação"], [aria-label*="Escreva algo"], [aria-label*="Sua conta"], [href*="/profile.php"], [href*="/me/"]').count() > 0;
-    } catch { return false; }
+
+      return await page.locator(
+        '[role="feed"], [aria-label*="Criar publicação"], [aria-label*="Escreva algo"], [aria-label*="Sua conta"], [href*="/profile.php"], [href*="/me/"]'
+      ).count() > 0;
+    } catch {
+      return false;
+    }
   }
 
   private async waitForManualAuthentication(page: Page): Promise<boolean> {
