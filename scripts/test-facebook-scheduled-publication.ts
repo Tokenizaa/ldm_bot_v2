@@ -3,11 +3,7 @@ import 'dotenv/config';
 const REQUIRED_ENV = [
   'SUPABASE_URL',
   'SUPABASE_SERVICE_ROLE_KEY',
-  'SESSION_SECRET',
   'FACEBOOK_GROUP_URL',
-  'FACEBOOK_HEADLESS',
-  'FACEBOOK_BROWSER_CHANNEL',
-  'APP_URL',
 ] as const;
 
 for (const name of REQUIRED_ENV) {
@@ -33,7 +29,7 @@ const content = `TESTE REAL FORGEDEALS V2\n\nMáquina de Solda Inversora Multipr
 console.log('=== TESTE REAL FACEBOOK ===');
 console.log(`Grupo: ${groupUrl}`);
 console.log(`Agendamento: ${scheduledDate} ${scheduledTime}`);
-console.log(`Canal: ${process.env.FACEBOOK_BROWSER_CHANNEL}`);
+console.log(`Canal: ${process.env.FACEBOOK_BROWSER_CHANNEL || 'chrome'}`);
 console.log('Headless: false');
 
 try {
