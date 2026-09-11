@@ -53,7 +53,7 @@ export class SchedulerService {
     );
 
     if (!candidates.length) {
-      logger.scheduler('MONTHLY_NO_CANDIDATES', 'Nenhum produto real elegível disponível.', 'warn');
+      logger.scheduler('MONTHLY_NO_CANDIDATES: Nenhum produto real elegível disponível.', 'warn');
       return { scheduled: [], quota: await storage.getQuota(), message: 'Nenhum produto real e elegível disponível.' };
     }
 
