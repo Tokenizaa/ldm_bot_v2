@@ -20,9 +20,13 @@ export class NvidiaAIService {
 
   async generateRawCopy(systemPrompt: string, userPrompt: string, customModel?: string): Promise<NvidiaGenerationResult> {
     const apiKey = process.env.NVIDIA_API_KEY?.trim();
-    const model = customModel && customModel !== 'unknown' ? customModel : (process.env.NVIDIA_MODEL || this.defaultModel);
+    const model = customModel && customModel !== 'unknown'
+      ? customModel
+      : (process.env.NVIDIA_MODEL || this.defaultModel);
 
-    if (!apiKey) return { content: '', model, success: false, error: 'NVIDIA_API_KEY não configurada.' };
+    if (!apiKey) {
+      return { content: '', model, success: false, error: 'NVIDIA_API_KEY não configurada.' };
+    }
 
     try {
       const response = await fetch(this.apiUrl, {
@@ -42,70 +46,13 @@ export class NvidiaAIService {
         })
       });
 
-      if (!response.ok) {\n        if (response.status === 404 && model !== this.activeFallbackModel) {\n          logger.ai(`Modelo NVIDIA ${model} não disponível (HTTP 404). Usando ${this.activeFallbackModel}.`, 'warn');\n          return this.generateRawCopy(systemPrompt, userPrompt, this.activeFallbackModel);\n        }\n        throw new Error(`NVIDIA API HTTP ${response.status}: ${(await response.text()).slice(0, 300)}`);\n      }
-
-      const data = await response.json() as any;
-      const content = String(data.choices?.[0]?.message?.content || '').trim();
-      if (!content) throw new Error('NVIDIA API retornou uma resposta sem conteúdo.');
-
-      logger.ai(`Copy gerada pelo agente para "${userPrompt.split('\\n')[0]}"`);
-      return { content, model, tokensUsed: data.usage?.total_tokens, success: true };
-    } catch (err: any) {
-      logger.ai(`Falha NVIDIA: ${err.message}`, 'error');
-      return { content: '', model, success: false, error: err.message };
-    }
-  }
-
-  async generateProductCopy(product: Product, affiliateUrl: string, customModel?: string): Promise<NvidiaGenerationResult> {
-    const apiKey = process.env.NVIDIA_API_KEY?.trim();
-    let model = customModel || process.env.NVIDIA_MODEL || this.defaultModel;
-
-    if (!apiKey) {
-      const error = 'NVIDIA_API_KEY não configurada. A geração de copy não pode continuar.';
-      logger.ai(error, 'error');
-      return { content: '', model, success: false, error };
-    }
-
-    if (!affiliateUrl.endsWith('/20889')) {
-      const error = 'URL de afiliado inválida: o sufixo /20889 é obrigatório.';
-      logger.ai(error, 'error');
-      return { content: '', model, success: false, error };
-    }
-
-    const currency = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
-    const currentPrice = currency.format(product.current_price);
-    const previousPrice = product.previous_price && product.previous_price > product.current_price
-      ? currency.format(product.previous_price)
-      : null;
-
-    const systemPrompt = `Você é um copywriter comercial para grupos do Facebook no Brasil.\nREGRAS: use somente os dados fornecidos; não invente desconto, estoque, garantia, avaliação, característica ou benefício; preserve exatamente o preço atual; o único link permitido é o afiliado fornecido; entregue apenas o texto pronto para publicação, com no máximo 6 linhas.`;
-    const userPrompt = `Produto: ${product.product_name}\nMarca: ${product.brand || 'não informada'}\nCategoria: ${product.category || 'não informada'}\nPreço atual: ${currentPrice}${previousPrice ? `\nPreço anterior: ${previousPrice}` : ''}\nLink afiliado obrigatório: ${affiliateUrl}`;
-
-    try {
-      const response = await fetch(this.apiUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${apiKey}`
-        },
-        body: JSON.stringify({
-          model,
-          messages: [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: userPrompt }
-          ],
-          temperature: 0.5,
-          max_tokens: 400
-        })
-      });
-
       if (!response.ok) {
-        if (response.status === 410 && model !== this.activeFallbackModel) {
-          logger.ai(`Modelo ${model} descontinuado pela NVIDIA (HTTP 410). Redirecionando automaticamente para ${this.activeFallbackModel}...`, 'warn');
-          return this.generateProductCopy(product, affiliateUrl, this.activeFallbackModel);
+        if (response.status === 404 && model !== this.activeFallbackModel) {
+          logger.ai(`Modelo NVIDIA ${model} não disponível (HTTP 404). Usando ${this.activeFallbackModel}.`, 'warn');
+          return this.generateRawCopy(systemPrompt, userPrompt, this.activeFallbackModel);
         }
-        const text = await response.text();
-        throw new Error(`NVIDIA API HTTP ${response.status}: ${text.slice(0, 300)}`);
+
+        throw new Error(`NVIDIA API HTTP ${response.status}: ${(await response.text()).slice(0, 300)}`);
       }
 
       const data = await response.json() as any;
@@ -115,11 +62,7 @@ export class NvidiaAIService {
         throw new Error('NVIDIA API retornou uma resposta sem conteúdo.');
       }
 
-      if (!content.includes(affiliateUrl)) {
-        throw new Error('A NVIDIA não retornou o link afiliado obrigatório; publicação bloqueada.');
-      }
-
-      logger.ai(`Copy NVIDIA gerada para "${product.product_name}"`);
+      logger.ai(`Copy gerada pelo agente para "${userPrompt.split('\n')[0]}"`);
       return {
         content,
         model,
@@ -130,6 +73,38 @@ export class NvidiaAIService {
       logger.ai(`Falha NVIDIA: ${err.message}`, 'error');
       return { content: '', model, success: false, error: err.message };
     }
+  }
+
+  async generateProductCopy(product: Product, affiliateUrl: string, customModel?: string): Promise<NvidiaGenerationResult> {
+    if (!affiliateUrl.endsWith('/20889')) {
+      return {
+        content: '',
+        model: customModel || process.env.NVIDIA_MODEL || this.defaultModel,
+        success: false,
+        error: 'URL de afiliado inválida: o sufixo /20889 é obrigatório.'
+      };
+    }
+
+    const systemPrompt = [
+      'Você é o agente oficial de copy SEO do ForgeDeals para grupos do Facebook no Brasil.',
+      'Use exclusivamente os dados estruturados fornecidos.',
+      'Não invente características, especificações, descontos, benefícios, avaliações, estoque, frete ou garantia.',
+      'NUNCA escreva preço, valor, moeda ou URL.',
+      'Crie uma copy comercial útil e interessante, não apenas um título.',
+      'Inclua @todos exatamente uma vez.',
+      'Use SEO natural e no máximo 4 hashtags relevantes.',
+      'O link será inserido pelo publicador somente para gerar o preview Open Graph e não pertence à copy.',
+      'Entregue somente a copy final.'
+    ].join('\n');
+
+    const userPrompt = [
+      `Nome: ${product.product_name}`,
+      `Marca: ${product.brand || 'não informada'}`,
+      `Categoria: ${product.category || 'não informada'}`,
+      `SKU: ${product.sku || 'não informado'}`
+    ].join('\n');
+
+    return this.generateRawCopy(systemPrompt, userPrompt, customModel);
   }
 }
 
