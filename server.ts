@@ -13,6 +13,7 @@ async function startServer() {
   const { authRouter } = await import('./server/routes/auth.js');
   const { frontendCompatRouter } = await import('./server/routes/frontend-compat.js');
   const { facebookSession } = await import('./server/services/FacebookSessionService.js');
+  const { facebookAutomation } = await import('./server/services/FacebookAutomationService.js');
   const { scheduler } = await import('./server/services/SchedulerService.js');
 
   const app = express();
@@ -43,14 +44,22 @@ async function startServer() {
       try {
         const status = await facebookSession.start();
         logger.system(`Facebook startup status=${status.status}`);
-        if (status.connected) {
-          // The database is the queue; Facebook is the source of truth for the
-          // final scheduled state. Fill the remaining monthly slots automatically.
-          const result = await scheduler.ensureMonthlySchedule();
-          logger.scheduler(`STARTUP_MONTHLY_SCHEDULE confirmed=${result.scheduled.length} message=${result.message}`, 'success');
-        } else {
+        if (!status.connected) {
           logger.scheduler('STARTUP_MONTHLY_SCHEDULE skipped: Facebook session not authenticated.', 'warn');
+          return;
         }
+
+        const settings = await (await import('./server/services/StorageService.js')).storage.getSettings();
+        const groupCheck = await facebookAutomation.verifyGroup(settings.facebook_group_url);
+        if (!groupCheck.accessible) {
+          logger.scheduler(`STARTUP_MONTHLY_SCHEDULE skipped: grupo Facebook não validado: ${groupCheck.message}`, 'error');
+          return;
+        }
+
+        // One persistent browser/context/page is reused. The preflight deliberately
+        // leaves the browser on the real group page before the scheduler starts.
+        const result = await scheduler.ensureMonthlySchedule();
+        logger.scheduler(`STARTUP_MONTHLY_SCHEDULE confirmed=${result.scheduled.length} message=${result.message}`, 'success');
       } catch (error: any) {
         logger.scheduler('STARTUP_MONTHLY_SCHEDULE failed: ' + error.message, 'error');
       }
