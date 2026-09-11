@@ -53,6 +53,9 @@ export class StorageService {
       facebook_post_url: row.facebook_post_id ? String(row.facebook_post_id) : undefined,
       published_at: row.published_at ? String(row.published_at) : undefined,
       error_message: row.error_message ? String(row.error_message) : undefined,
+      attempts: row.attempts != null ? Number(row.attempts) : 0,
+      max_attempts: row.max_attempts != null ? Number(row.max_attempts) : 3,
+      next_attempt_at: row.next_attempt_at ? String(row.next_attempt_at) : undefined,
       created_at: row.created_at || new Date().toISOString(), updated_at: row.last_attempt_at || row.created_at || new Date().toISOString()
     };
   }
@@ -178,6 +181,8 @@ export class StorageService {
     const record = {
       id: crypto.randomUUID(), affiliate_link_id: pub.product_id, scheduled_at: pub.scheduled_at,
       status: pub.status, content: pub.content, group_id: pub.facebook_group_url || null,
+      idempotency_key: `${pub.product_id}:${pub.facebook_group_url || ''}:${pub.scheduled_at}`,
+      attempts: 0, max_attempts: 3, next_attempt_at: null,
       created_at: now
     };
     const { data, error } = await this.supabase.from('posts').insert(record).select('*').single();
@@ -194,6 +199,9 @@ export class StorageService {
     if (updates.facebook_post_url !== undefined) clean.facebook_post_id = updates.facebook_post_url;
     if (updates.published_at !== undefined) clean.published_at = updates.published_at;
     if (updates.error_message !== undefined) clean.error_message = updates.error_message;
+    if (updates.attempts !== undefined) clean.attempts = updates.attempts;
+    if (updates.max_attempts !== undefined) clean.max_attempts = updates.max_attempts;
+    if (updates.next_attempt_at !== undefined) clean.next_attempt_at = updates.next_attempt_at;
     clean.last_attempt_at = new Date().toISOString();
     const { data, error } = await this.supabase.from('posts').update(clean).eq('id', id).select('*').maybeSingle();
     if (error) throw new Error(`Falha ao atualizar publicação: ${error.message}`);
