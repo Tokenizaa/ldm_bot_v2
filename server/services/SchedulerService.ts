@@ -10,17 +10,13 @@ const CONFIRMED = ['scheduled', 'published'] as const;
 function localIso(date: string, time: string): string {
   return new Date(`${date}T${time}:00-03:00`).toISOString();
 }
-
 function localDateString(date: Date): string {
   return new Intl.DateTimeFormat('en-CA', { timeZone: TIME_ZONE, year: 'numeric', month: '2-digit', day: '2-digit' }).format(date);
 }
-
 function monthDates(year: number, month: number): string[] {
   const result: string[] = [];
   const last = new Date(Date.UTC(year, month, 0)).getUTCDate();
-  for (let day = 1; day <= last; day++) {
-    result.push(`${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`);
-  }
+  for (let day = 1; day <= last; day++) result.push(`${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`);
   return result;
 }
 
@@ -28,24 +24,18 @@ export class SchedulerService {
   async ensureMonthlySchedule(targetDateStr?: string): Promise<{ scheduled: Publication[]; quota: OperationalQuota; message: string }> {
     const settings = await storage.getSettings();
     const now = new Date();
-    const anchor = targetDateStr
-      ? new Date(`${targetDateStr}T12:00:00-03:00`)
-      : now;
+    const anchor = targetDateStr ? new Date(`${targetDateStr}T12:00:00-03:00`) : now;
     const anchorLocal = localDateString(anchor);
     const [year, month] = anchorLocal.split('-').map(Number);
     const monthPrefix = `${year}-${String(month).padStart(2, '0')}`;
     const all = await storage.getPublications();
-
     logger.scheduler(`MONTHLY_SCAN month=${monthPrefix} localNow=${localDateString(now)}`);
 
-    // A local "scheduled" row is only considered a real reservation when it has no
-    // error. Broken historical rows are never allowed to consume a Facebook slot.
     const confirmed = all.filter(p =>
       (CONFIRMED as readonly string[]).includes(p.status) &&
       !p.error_message &&
       (p.published_at || p.scheduled_at)
     );
-
     const reservedMonth = confirmed.filter(p => (p.published_at || p.scheduled_at || '').startsWith(monthPrefix)).length;
     if (reservedMonth >= settings.monthly_limit) {
       return { scheduled: [], quota: await storage.getQuota(), message: `Meta mensal já preenchida (${reservedMonth}/${settings.monthly_limit}).` };
@@ -53,23 +43,13 @@ export class SchedulerService {
 
     const hours = settings.daily_hours?.length ? settings.daily_hours : DEFAULT_HOURS;
     const usedProducts = new Set(confirmed.map(p => p.product_id));
-    const usedSlots = new Set(
-      confirmed
-        .filter(p => (p.scheduled_at || '').startsWith(monthPrefix))
-        .map(p => p.scheduled_at)
-    );
-
+    const usedSlots = new Set(confirmed.filter(p => (p.scheduled_at || '').startsWith(monthPrefix)).map(p => p.scheduled_at));
     const products = await storage.getProducts(true);
     const candidates = products.filter(p =>
-      !usedProducts.has(p.id) &&
-      p.current_price > 0 &&
-      !!p.product_name &&
-      /^https?:\/\/i.test(p.original_url) &&
-      /^https?:\/\/i.test(p.affiliate_url) &&
-      p.affiliate_url.includes('/20889') &&
-      !!p.facebook_copy?.trim() &&
-      !/https?:\/\/i.test(p.facebook_copy) &&
-      !/R\$/i.test(p.facebook_copy)
+      !usedProducts.has(p.id) && p.current_price > 0 && !!p.product_name &&
+      /^https?:\/\//i.test(p.original_url) && /^https?:\/\//i.test(p.affiliate_url) &&
+      p.affiliate_url.includes('/20889') && !!p.facebook_copy?.trim() &&
+      !/https?:\/\//i.test(p.facebook_copy) && !/R\$/i.test(p.facebook_copy)
     );
 
     if (!candidates.length) {
@@ -79,19 +59,13 @@ export class SchedulerService {
 
     const scheduled: Publication[] = [];
     let candidateIndex = 0;
-
     for (const date of monthDates(year, month)) {
       for (const time of hours) {
         if (reservedMonth + scheduled.length >= settings.monthly_limit) break;
-
         const slotIso = localIso(date, time);
-        if (new Date(slotIso).getTime() <= Date.now()) continue;
-        if (usedSlots.has(slotIso)) continue;
-
-        // Five posts per local day is the hard operational quota.
+        if (new Date(slotIso).getTime() <= Date.now() || usedSlots.has(slotIso)) continue;
         const dayCount = [...usedSlots].filter(v => v.startsWith(date)).length;
         if (dayCount >= settings.daily_limit) break;
-
         while (candidateIndex < candidates.length && usedProducts.has(candidates[candidateIndex].id)) candidateIndex++;
         const product = candidates[candidateIndex++];
         if (!product) break;
@@ -103,10 +77,7 @@ export class SchedulerService {
           content: product.facebook_copy!.trim(),
           facebook_group_url: settings.facebook_group_url
         });
-
         logger.scheduler(`QUEUE_CREATED id=${publication.id} product=${product.id} slot=${date}T${time}`);
-
-        // The DB row is NOT marked scheduled until Facebook itself confirms it.
         const result = await this.schedulePublication(publication.id);
         if (result) {
           scheduled.push(result);
@@ -117,96 +88,44 @@ export class SchedulerService {
         }
       }
     }
-
     const quota = await storage.getQuota();
     logger.scheduler(`MONTHLY_DONE month=${monthPrefix} confirmed=${scheduled.filter(p => p.status === 'scheduled').length} quota=${quota.monthly_publication_count}/${quota.monthly_limit}`, 'success');
-    return {
-      scheduled,
-      quota,
-      message: `${scheduled.filter(p => p.status === 'scheduled').length} agendamento(s) confirmado(s) no Facebook.`
-    };
+    return { scheduled, quota, message: `${scheduled.filter(p => p.status === 'scheduled').length} agendamento(s) confirmado(s) no Facebook.` };
   }
 
-  async scheduleDailyBatch(targetDateStr?: string) {
-    return this.ensureMonthlySchedule(targetDateStr);
-  }
+  async scheduleDailyBatch(targetDateStr?: string) { return this.ensureMonthlySchedule(targetDateStr); }
 
   async schedulePublication(publicationId: string): Promise<Publication | undefined> {
     const pub = await storage.getPublicationById(publicationId);
     if (!pub) throw new Error('Publicação não encontrada.');
-    if (!['draft', 'scheduled', 'failed'].includes(pub.status)) {
-      throw new Error('Publicação não está disponível para agendamento.');
-    }
-    if (!pub.product?.affiliate_url?.includes('/20889')) {
-      throw new Error('Produto sem link afiliado /20889 válido.');
-    }
-    if (!pub.content?.trim() || /https?:\/\/i.test(pub.content) || /R\$/i.test(pub.content)) {
-      throw new Error('Publicação bloqueada: copy contém URL ou preço.');
-    }
-
+    if (!['draft', 'failed'].includes(pub.status)) throw new Error('Publicação não está disponível para agendamento.');
+    if (!pub.product?.affiliate_url?.includes('/20889')) throw new Error('Produto sem link afiliado /20889 válido.');
+    if (!pub.content?.trim() || /https?:\/\//i.test(pub.content) || /R\$/i.test(pub.content)) throw new Error('Publicação bloqueada: copy contém URL ou preço.');
     const scheduledDate = new Date(pub.scheduled_at);
-    if (Number.isNaN(scheduledDate.getTime()) || scheduledDate.getTime() <= Date.now()) {
-      throw new Error('Escolha uma data/hora futura para programar.');
-    }
-
+    if (Number.isNaN(scheduledDate.getTime()) || scheduledDate.getTime() <= Date.now()) throw new Error('Escolha uma data/hora futura para programar.');
     const settings = await storage.getSettings();
     const date = new Intl.DateTimeFormat('en-CA', { timeZone: TIME_ZONE, year: 'numeric', month: '2-digit', day: '2-digit' }).format(scheduledDate);
     const time = new Intl.DateTimeFormat('en-GB', { timeZone: TIME_ZONE, hour: '2-digit', minute: '2-digit', hour12: false }).format(scheduledDate);
     const attempts = (pub.attempts || 0) + 1;
-
     logger.scheduler(`PROGRAM_START id=${pub.id} product=${pub.product_id} date=${date} time=${time} attempt=${attempts}`);
-
-    const result = await facebookAutomation.schedule({
-      groupUrl: pub.facebook_group_url || settings.facebook_group_url,
-      content: pub.content,
-      affiliateUrl: pub.product.affiliate_url,
-      scheduledDate: date,
-      scheduledTime: time
-    });
-
+    const result = await facebookAutomation.schedule({ groupUrl: pub.facebook_group_url || settings.facebook_group_url, content: pub.content, affiliateUrl: pub.product.affiliate_url, scheduledDate: date, scheduledTime: time });
     if (!result.success) {
       logger.scheduler(`PROGRAM_FAILED id=${pub.id} error=${result.error || 'unknown'}`, 'error');
-      return storage.updatePublication(pub.id, {
-        status: 'failed',
-        attempts,
-        next_attempt_at: undefined,
-        error_message: result.error || 'Facebook não confirmou o agendamento.'
-      });
+      return storage.updatePublication(pub.id, { status: 'failed', attempts, error_message: result.error || 'Facebook não confirmou o agendamento.' });
     }
-
     logger.scheduler(`FACEBOOK_SCHEDULE_CONFIRMED id=${pub.id} facebook=${result.postUrl || 'verified-scheduled-posts'}`, 'success');
-    return storage.updatePublication(pub.id, {
-      status: 'scheduled',
-      attempts,
-      next_attempt_at: undefined,
-      error_message: undefined,
-      facebook_post_url: result.postUrl,
-      scheduled_at: result.scheduledAt || pub.scheduled_at
-    });
+    return storage.updatePublication(pub.id, { status: 'scheduled', attempts, error_message: undefined, facebook_post_url: result.postUrl, scheduled_at: result.scheduledAt || pub.scheduled_at });
   }
 
   async checkAndProcessDuePublications(): Promise<number> {
     const now = Date.now();
-    const due = (await storage.getPublications('failed')).filter(
-      p => p.next_attempt_at && new Date(p.next_attempt_at).getTime() <= now && new Date(p.scheduled_at).getTime() > now
-    );
-
+    const due = (await storage.getPublications('failed')).filter(p => p.next_attempt_at && new Date(p.next_attempt_at).getTime() <= now && new Date(p.scheduled_at).getTime() > now);
     logger.scheduler(`RETRY_SCAN count=${due.length}`);
     for (const pub of due) await this.schedulePublication(pub.id);
     return due.length;
   }
-
-  async publishNow(publicationId: string): Promise<Publication | undefined> {
-    throw new Error('FACEBOOK_IMMEDIATE_PUBLISH_DISABLED: o fluxo operacional é agendamento nativo no Facebook.');
-  }
-
-  async reschedule(_publicationId: string, _newDateIso: string): Promise<Publication | undefined> {
-    throw new Error('FACEBOOK_NATIVE_RESCHEDULE_UNSUPPORTED: altere o agendamento diretamente no Facebook.');
-  }
-
-  async cancel(_publicationId: string): Promise<Publication | undefined> {
-    throw new Error('FACEBOOK_NATIVE_CANCEL_UNSUPPORTED: cancelamento nativo deve ser feito no Facebook.');
-  }
+  async publishNow(_publicationId: string): Promise<Publication | undefined> { throw new Error('FACEBOOK_IMMEDIATE_PUBLISH_DISABLED: o fluxo operacional é agendamento nativo no Facebook.'); }
+  async reschedule(_publicationId: string, _newDateIso: string): Promise<Publication | undefined> { throw new Error('FACEBOOK_NATIVE_RESCHEDULE_UNSUPPORTED: altere o agendamento diretamente no Facebook.'); }
+  async cancel(_publicationId: string): Promise<Publication | undefined> { throw new Error('FACEBOOK_NATIVE_CANCEL_UNSUPPORTED: cancelamento nativo deve ser feito no Facebook.'); }
 }
-
 export const scheduler = new SchedulerService();
