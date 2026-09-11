@@ -196,8 +196,6 @@ export class CrawlerService {
       }
     });
 
-    // Current Loja do Mecânico pagination is path-based, e.g.
-    // /subcategorias/21/224/V/0/2/serra-eletrica. It is not ?page=2.
     return [...links];
   }
 
@@ -253,9 +251,6 @@ export class CrawlerService {
     const target = 150;
     const configured = settings.crawler_target_urls?.filter(Boolean) || [];
 
-    // Current live catalog routes. The old /categoria/... seeds were removed from
-    // the site and returned 404. Home is also included so the crawler can discover
-    // newly added subcategories without hardcoding the whole catalog.
     const defaults = [
       LDM_ORIGIN,
       `${LDM_ORIGIN}/subcategorias/21/224/serra-eletrica`,
@@ -265,7 +260,9 @@ export class CrawlerService {
       `${LDM_ORIGIN}/hotsite/auto-mecanica`,
     ];
 
-    const listingUrls = configured.length ? configured : defaults;
+    // Keep valid configured seeds, but ALWAYS include current live seeds so an old
+    // system_config containing 404 /categoria/... URLs cannot block the batch.
+    const listingUrls = [...new Set([...configured, ...defaults])];
     const candidateUrls = await this.discoverProductUrls(listingUrls, target * 3);
 
     if (!candidateUrls.length) throw new Error('Nenhuma URL real de produto foi descoberta.');
