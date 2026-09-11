@@ -244,9 +244,15 @@ export class FacebookService {
     }
   }
 
-  async publishTest(groupUrl: string): Promise<{ success: boolean; message: string }> {
-    const result = await this.verifyGroupAccess(groupUrl);
-    return { success: result.accessible, message: result.message };
+  async getAuthenticatedPage(): Promise<Page> {
+    const context = await this.getOrCreateBrowserContext();
+    const page = await this.getWorkingPage(context);
+    if (!(await this.checkPageLoginStatus(page))) throw new Error('Facebook requer autenticação.');
+    return page;
+  }
+
+  async isGroupComposerAvailable(page: Page): Promise<boolean> {
+    return await page.locator('[role="button"]:has-text("Escreva algo"), [aria-label*="Criar uma publicação"], [aria-label*="Escreva algo"]').count() > 0;
   }
 
   private async openComposer(page: Page): Promise<boolean> {
