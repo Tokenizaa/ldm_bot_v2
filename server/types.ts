@@ -11,6 +11,7 @@ export interface Product {
   previous_price?: number;
   lowest_price?: number;
   image_url?: string;
+  facebook_copy?: string;
   active: boolean;
   last_scraped_at: string;
   created_at: string;
