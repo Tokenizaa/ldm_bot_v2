@@ -24,7 +24,9 @@ export class SchedulerService {
 
     const slotsAvailable = Math.min(settings.daily_limit - reservedToday, settings.monthly_limit - reservedMonth);
     const products = await storage.getProducts(true);
-    const usedProductIds = new Set(allPublications.map(p => p.product_id));
+    const usedProductIds = new Set(
+      allPublications.filter(p => ['scheduled', 'publishing', 'published'].includes(p.status)).map(p => p.product_id)
+    );
     const candidates = products.filter(p =>
       !usedProductIds.has(p.id) &&
       p.current_price > 0 &&
@@ -191,8 +193,52 @@ export class SchedulerService {
     return due.length;
   }
 
-  async publishNow(_publicationId: string): Promise<Publication | undefined> {
-    throw new Error('PUBLICAR_AGORA_DESABILITADO: use Programar para o agendamento nativo do Facebook.');
+  async publishNow(publicationId: string): Promise<Publication | undefined> {
+    const pub = await storage.getPublicationById(publicationId);
+    if (!pub) throw new Error('Publicação não encontrada.');
+    if (!pub.product?.affiliate_url?.includes('/20889')) throw new Error('Produto sem link afiliado /20889 válido.');
+    if (!pub.content?.trim() || /https?:\/\//i.test(pub.content) || /R\$/i.test(pub.content)) {
+      throw new Error('Publicação bloqueada: copy contém URL ou preço.');
+    }
+
+    const settings = await storage.getSettings();
+    const attempts = (pub.attempts || 0) + 1;
+    logger.scheduler('PUBLISH_NOW_START id=' + pub.id + ' product=' + pub.product_id + ' attempt=' + attempts);
+
+    await storage.updatePublication(pub.id, {
+      status: 'publishing',
+      attempts,
+      error_message: undefined,
+      next_attempt_at: undefined
+    });
+
+    try {
+      const result = await facebookAutomation.publish({
+        groupUrl: pub.facebook_group_url || settings.facebook_group_url,
+        content: pub.content,
+        affiliateUrl: pub.product.affiliate_url
+      });
+
+      if (!result.success) throw new Error(result.error || 'Facebook não confirmou a publicação.');
+
+      const updated = await storage.updatePublication(pub.id, {
+        status: 'published',
+        published_at: new Date().toISOString(),
+        facebook_post_url: result.postUrl,
+        error_message: undefined,
+        next_attempt_at: undefined
+      });
+
+      logger.scheduler('PUBLISH_NOW_CONFIRMED id=' + pub.id + ' postUrl=' + (result.postUrl || 'none'), 'success');
+      return updated;
+    } catch (error: any) {
+      logger.scheduler('PUBLISH_NOW_FAILED id=' + pub.id + ' error=' + error.message, 'error');
+      return storage.updatePublication(pub.id, {
+        status: 'failed',
+        error_message: error.message,
+        next_attempt_at: undefined
+      });
+    }
   }
 
   async reschedule(_publicationId: string, _newDateIso: string): Promise<Publication | undefined> {
