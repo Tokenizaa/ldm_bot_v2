@@ -273,6 +273,18 @@ export default function App() {
   };
 
   
+  const handlePublishNow = async (id: string) => {
+    try {
+      const res = await apiRequest(`/api/publications/${id}/publish-now`, { method: 'POST' });
+      if (!res?.success) throw new Error(res?.error || 'Facebook não confirmou a publicação.');
+      showToast('Publicação enviada ao Facebook.', 'success');
+      await fetchAllData();
+    } catch (err: any) {
+      showToast(`Erro ao publicar: ${err.message}`, 'error');
+      await fetchAllData();
+    }
+  };
+
   const handleRetryPublication = async (id: string) => {
     try {
       await apiRequest(`/api/publications/${id}/retry`, { method: 'POST' });
@@ -483,6 +495,7 @@ export default function App() {
                 setIsCopyModalOpen(true);
               }}
               onScheduleAll={handleScheduleAll}
+              onPublishNow={handlePublishNow}
               isSchedulingAll={isSchedulingAll}
               isGeneratingBatch={isGeneratingBatch}
             />
