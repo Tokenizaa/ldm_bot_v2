@@ -298,6 +298,31 @@ export class FacebookService {
     ).count() > 0;
   }
 
+  private async fillCopyAndBuildLinkPreview(page: Page, copy: string, affiliateUrl: string): Promise<boolean> {
+    const textbox = page.locator(
+      '[role="dialog"] [role="textbox"], [role="dialog"] [contenteditable="true"], [role="textbox"][contenteditable="true"]'
+    ).first();
+    if (!(await textbox.count())) return false;
+
+    await textbox.click({ timeout: 10000 });
+    await page.keyboard.press('Control+A').catch(() => undefined);
+    await page.keyboard.insertText(copy.trim() + '\\n' + affiliateUrl);
+    await page.waitForTimeout(4500);
+
+    const textBefore = await textbox.textContent().catch(() => '');
+    if (!textBefore.includes(affiliateUrl)) return false;
+
+    await textbox.click({ timeout: 10000 });
+    await page.keyboard.press('End');
+    await page.keyboard.press('Shift+Home');
+    await page.keyboard.press('Backspace');
+    await page.keyboard.press('Backspace').catch(() => undefined);
+    await page.waitForTimeout(800);
+
+    const textAfter = await textbox.textContent().catch(() => '');
+    return !textAfter.includes(affiliateUrl);
+  }
+
   private async fillComposer(page: Page, content: string): Promise<boolean> {
     const textbox = page.locator(
       '[role="dialog"] [role="textbox"], [role="dialog"] [contenteditable="true"], [role="textbox"][contenteditable="true"]'
@@ -384,7 +409,7 @@ export class FacebookService {
     if (!input.groupUrl?.includes('/groups/')) return { success: false, error: 'FACEBOOK_GROUP_ACCESS_FAILED: URL de grupo inválida.' };
     if (!input.content?.trim()) return { success: false, error: 'FACEBOOK_CONTENT_FIELD_NOT_FOUND: conteúdo vazio.' };
     if (!input.affiliateUrl || !/^https?:\/\//i.test(input.affiliateUrl) || !input.affiliateUrl.includes('/20889')) return { success: false, error: 'FACEBOOK_AFFILIATE_URL_INVALID' };
-    if (!input.content.includes(input.affiliateUrl) || !input.content.includes('/20889')) return { success: false, error: 'FACEBOOK_AFFILIATE_URL_INVALID: link afiliado não está no conteúdo.' };
+    if (/https?:\/\//i.test(input.content) || /R\$/i.test(input.content)) return { success: false, error: 'FACEBOOK_CONTENT_INVALID: copy não deve conter URL nem preço.' };
     if (!/^\d{4}-\d{2}-\d{2}$/.test(input.scheduledDate)) return { success: false, error: 'FACEBOOK_DATE_FIELD_NOT_FOUND: data deve ser YYYY-MM-DD.' };
     if (!/^\d{2}:\d{2}$/.test(input.scheduledTime)) return { success: false, error: 'FACEBOOK_TIME_FIELD_NOT_FOUND: hora deve ser HH:mm.' };
 
@@ -405,7 +430,7 @@ export class FacebookService {
       await page.goto(input.groupUrl, { waitUntil: 'domcontentloaded', timeout: 35000 });
       await page.waitForTimeout(1500);
       if (!(await this.openComposer(page))) return { success: false, error: 'FACEBOOK_COMPOSER_NOT_FOUND' };
-      if (!(await this.fillComposer(page, input.content))) return { success: false, error: 'FACEBOOK_CONTENT_FIELD_NOT_FOUND' };
+      if (!(await this.fillCopyAndBuildLinkPreview(page, input.content, input.affiliateUrl))) return { success: false, error: 'FACEBOOK_CONTENT_OR_LINK_PREVIEW_FAILED' };
       await page.waitForTimeout(2500);
       if (!(await this.openScheduling(page))) return { success: false, error: 'FACEBOOK_SCHEDULING_UNAVAILABLE' };
       if (!(await this.selectFacebookDate(page, input.scheduledDate))) return { success: false, error: 'FACEBOOK_DATE_FIELD_NOT_FOUND' };
@@ -437,7 +462,9 @@ export class FacebookService {
 
   async publishSingle(publication: Publication): Promise<{ success: boolean; postUrl?: string; error?: string }> {
     if (!(await this.ensureFacebookSession())) return { success: false, error: 'Facebook requer autenticação.' };
-    if (!publication.content?.includes('/20889')) return { success: false, error: 'Publicação bloqueada: link afiliado /20889 ausente.' };
+    const product = await storage.getProductById(publication.product_id);
+    if (!product?.affiliate_url?.includes('/20889')) return { success: false, error: 'Publicação bloqueada: produto sem link afiliado /20889 válido.' };
+    if (/https?:\/\//i.test(publication.content) || /R\$/i.test(publication.content)) return { success: false, error: 'Publicação bloqueada: copy contém URL ou preço.' };
 
     const settings = await storage.getSettings();
     const targetGroupUrl = publication.facebook_group_url || settings.facebook_group_url;
@@ -449,7 +476,7 @@ export class FacebookService {
       await page.goto(targetGroupUrl, { waitUntil: 'domcontentloaded', timeout: 35000 });
       await page.waitForTimeout(1500);
       if (!(await this.openComposer(page))) return { success: false, error: 'FACEBOOK_COMPOSER_NOT_FOUND' };
-      if (!(await this.fillComposer(page, publication.content))) return { success: false, error: 'FACEBOOK_CONTENT_FIELD_NOT_FOUND' };
+      if (!(await this.fillCopyAndBuildLinkPreview(page, publication.content, product.affiliate_url))) return { success: false, error: 'FACEBOOK_CONTENT_OR_LINK_PREVIEW_FAILED' };
       await page.waitForTimeout(2000);
 
       const dialog = page.locator('[role="dialog"]').last();
