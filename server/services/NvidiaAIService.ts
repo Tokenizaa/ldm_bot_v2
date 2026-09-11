@@ -18,6 +18,44 @@ export class NvidiaAIService {
     return Boolean(process.env.NVIDIA_API_KEY?.trim());
   }
 
+  async generateRawCopy(systemPrompt: string, userPrompt: string, customModel?: string): Promise<NvidiaGenerationResult> {
+    const apiKey = process.env.NVIDIA_API_KEY?.trim();
+    const model = customModel || process.env.NVIDIA_MODEL || this.defaultModel;
+
+    if (!apiKey) return { content: '', model, success: false, error: 'NVIDIA_API_KEY não configurada.' };
+
+    try {
+      const response = await fetch(this.apiUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt }
+          ],
+          temperature: 0.75,
+          max_tokens: 500
+        })
+      });
+
+      if (!response.ok) throw new Error(`NVIDIA API HTTP ${response.status}: ${(await response.text()).slice(0, 300)}`);
+
+      const data = await response.json() as any;
+      const content = String(data.choices?.[0]?.message?.content || '').trim();
+      if (!content) throw new Error('NVIDIA API retornou uma resposta sem conteúdo.');
+
+      logger.ai(`Copy gerada pelo agente para "${userPrompt.split('\\n')[0]}"`);
+      return { content, model, tokensUsed: data.usage?.total_tokens, success: true };
+    } catch (err: any) {
+      logger.ai(`Falha NVIDIA: ${err.message}`, 'error');
+      return { content: '', model, success: false, error: err.message };
+    }
+  }
+
   async generateProductCopy(product: Product, affiliateUrl: string, customModel?: string): Promise<NvidiaGenerationResult> {
     const apiKey = process.env.NVIDIA_API_KEY?.trim();
     let model = customModel || process.env.NVIDIA_MODEL || this.defaultModel;
