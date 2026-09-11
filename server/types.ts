@@ -45,14 +45,14 @@ export interface AppSettings {
   facebook_group_url: string;
   daily_limit: number;
   monthly_limit: number;
-  daily_hours: string[]; // e.g. ["08:00", "11:00", "14:00", "17:00", "20:00"]
+  daily_hours: string[];
   crawler_categories: string[];
   crawler_target_urls: string[];
   nvidia_model: string;
 }
 
 export interface OperationalQuota {
-  current_month: string; // e.g. "2026-09"
+  current_month: string;
   monthly_publication_count: number;
   monthly_limit: number;
   daily_publication_count: number;
@@ -83,7 +83,7 @@ export interface CrawlerRunResult {
 
 export interface FacebookSessionStatus {
   connected: boolean;
-  status: 'connected' | 'requires_reauth' | 'disconnected';
+  status: 'connected' | 'connecting' | 'requires_reauth' | 'disconnected';
   last_authenticated_at?: string;
   configured_group_url?: string;
   group_accessible?: boolean;
