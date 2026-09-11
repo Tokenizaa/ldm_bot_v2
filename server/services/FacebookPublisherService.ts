@@ -3,6 +3,7 @@ import { Product } from '../types.js';
 import { FacebookService, facebookService } from './FacebookService.js';
 import { storage } from './StorageService.js';
 import { logger } from './LoggerService.js';
+import { contentService } from './ContentService.js';
 
 export interface FacebookTestPublishResult {
   success: boolean;
@@ -55,6 +56,44 @@ export class FacebookPublisherService {
       '[role="dialog"] textarea, ' +
       '[role="dialog"] input[role="textbox"]'
     ).first();
+  }
+
+  /**
+   * Facebook needs the raw affiliate URL long enough to fetch its Open Graph
+   * preview. After the preview is created, remove the URL from the text so the
+   * published copy remains evergreen and the preview remains responsible for
+   * current price/metadata.
+   */
+  private async fillCopyAndBuildLinkPreview(page: Page, copy: string, affiliateUrl: string): Promise<boolean> {
+    const textbox = this.getComposerTextbox(page);
+    if (!(await textbox.count().catch(() => 0))) return false;
+
+    await textbox.scrollIntoViewIfNeeded().catch(() => undefined);
+    await textbox.click({ timeout: 10000 });
+    await page.keyboard.press('Control+A').catch(() => undefined);
+    await page.keyboard.insertText(copy.trim() + '\\n' + affiliateUrl);
+    await page.waitForTimeout(4500);
+
+    const bodyText = await page.locator('[role="dialog"]').last().innerText().catch(() => '');
+    if (!bodyText.includes(affiliateUrl) && !(await textbox.textContent().catch(() => '')).includes(affiliateUrl)) {
+      return false;
+    }
+
+    // URL is deliberately the final line. Remove only that line with keyboard
+    // selection so Facebook's editor state receives real input events.
+    await textbox.click({ timeout: 10000 });
+    await page.keyboard.press('End');
+    await page.keyboard.press('Shift+Home');
+    await page.keyboard.press('Backspace');
+    await page.keyboard.press('Backspace').catch(() => undefined);
+    await page.waitForTimeout(800);
+
+    const remaining = await textbox.textContent().catch(() => '');
+    if (remaining.includes(affiliateUrl)) {
+      return false;
+    }
+
+    return true;
   }
 
   private async fillComposer(page: Page, content: string): Promise<boolean> {
@@ -128,9 +167,8 @@ export class FacebookPublisherService {
   }
 
   private buildTestContent(product: Product): string {
-    // Canonical Facebook copy: NEVER expose price in the text.
-    // The affiliate URL is the source of truth for the current offer/price.
-    // Keep @todos as the first-class audience mention requested for group posts.
+    // Kept only for backwards compatibility with callers that inspect this
+    // service. Actual publication uses the canonical LLM copy agent.
     return [
       '🔥 OFERTA — Loja do Mecânico',
       '',
@@ -138,12 +176,10 @@ export class FacebookPublisherService {
       product.sku ? `Código: ${product.sku}` : '',
       '',
       'Confira a oferta:',
-      product.affiliate_url,
-      '',
       '@todos',
       '',
       '#oferta #ferramentas #lojadomecanico'
-    ].filter(Boolean).join('\n');
+    ].filter(Boolean).join('\\n');
   }
 
   async publishTest(groupUrl: string): Promise<FacebookTestPublishResult> {
@@ -167,9 +203,9 @@ export class FacebookPublisherService {
       return { success: false, message: 'Não foi possível abrir o composer do grupo.' };
     }
 
-    const content = this.buildTestContent(product);
-    if (!(await this.fillComposer(page, content))) {
-      return { success: false, message: 'Campo de conteúdo da publicação não foi encontrado.' };
+    const generated = await contentService.generateCopyForProduct(product);
+    if (!(await this.fillCopyAndBuildLinkPreview(page, generated.content, generated.affiliateUrl))) {
+      return { success: false, message: 'Não foi possível preencher a copy e gerar o preview Open Graph do produto.' };
     }
 
     await page.waitForTimeout(2000);
