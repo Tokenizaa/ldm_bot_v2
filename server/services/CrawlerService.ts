@@ -19,11 +19,6 @@ export interface RawScrapedProduct {
 }
 
 export class CrawlerService {
-  /**
-   * Loja do Mecânico currently serves catalog HTML to a browser-like HTTP client,
-   * while the old ForgeDeals/1.0 user-agent can be challenged by the site's bot layer.
-   * Playwright is intentionally NOT part of the production crawler.
-   */
   private defaultHeaders = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36',
     Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
@@ -40,8 +35,7 @@ export class CrawlerService {
   private isLdmProductUrl(url: string): boolean {
     try {
       const parsed = new URL(url, LDM_ORIGIN);
-      return parsed.protocol === 'https:' &&
-        parsed.hostname === LDM_HOST &&
+      return parsed.protocol === 'https:' && parsed.hostname === LDM_HOST &&
         /^\/produto\/\d+(?:\/|$)/i.test(parsed.pathname) &&
         !/["'<>]|&quot;|&amp;|\\/i.test(parsed.pathname);
     } catch {
@@ -54,8 +48,6 @@ export class CrawlerService {
       const parsed = new URL(url, LDM_ORIGIN);
       if (parsed.protocol !== 'https:' || parsed.hostname !== LDM_HOST) return false;
       if (/^\/produto\//i.test(parsed.pathname)) return false;
-      // /categoria/* is legacy and currently returns 404. The live catalog uses
-      // /subcategorias/* and /hotsite/* routes.
       return /^\/(?:subcategorias|hotsite)(?:\/|$)/i.test(parsed.pathname);
     } catch {
       return false;
@@ -84,14 +76,10 @@ export class CrawlerService {
     try {
       const response = await fetch(url, {
         signal: controller.signal,
-        headers: {
-          ...this.defaultHeaders,
-          Referer: LDM_ORIGIN + '/',
-        },
+        headers: { ...this.defaultHeaders, Referer: LDM_ORIGIN + '/' },
         redirect: 'follow',
       });
       if (!response.ok) throw new Error(`HTTP ${response.status} ao acessar ${url}`);
-
       const html = await response.text();
       if (!html.trim()) throw new Error(`HTML vazio ao acessar ${url}`);
       return html;
@@ -121,7 +109,6 @@ export class CrawlerService {
         for (const item of this.getJsonLdProducts(parsed)) {
           const types = Array.isArray(item?.['@type']) ? item['@type'] : [item?.['@type']];
           if (!types.some((type: unknown) => String(type).toLowerCase() === 'product')) continue;
-
           const offers = Array.isArray(item.offers) ? item.offers[0] : item.offers;
           const price = this.parsePrice(offers?.price ?? offers?.lowPrice ?? offers?.highPrice);
           const name = String(item.name ?? '').trim();
@@ -134,7 +121,6 @@ export class CrawlerService {
           const brand = typeof item.brand === 'object' ? item.brand?.name : item.brand;
           const image = Array.isArray(item.image) ? item.image[0] : item.image;
           const sku = item.sku ?? item.mpn ?? item.productId;
-
           found = {
             name,
             current_price: price,
@@ -156,36 +142,21 @@ export class CrawlerService {
 
   extractDomProduct(html: string, pageUrl: string): RawScrapedProduct | null {
     const $ = cheerio.load(html);
-    const name = String(
-      $('meta[property="og:title"]').attr('content') || $('h1').first().text()
-    ).trim();
-    const image =
-      $('meta[property="og:image"]').attr('content') ||
-      $('.product-image img, [data-testid="product-image"]').first().attr('src');
+    const name = String($('meta[property="og:title"]').attr('content') || $('h1').first().text()).trim();
+    const image = $('meta[property="og:image"]').attr('content') || $('.product-image img, [data-testid="product-image"]').first().attr('src');
     const metaPrice = $('meta[property="product:price:amount"]').attr('content');
     const priceText = $('[data-testid*="price"], .preco-avista, .price, .product-price, [class*="price"]').first().text();
     const price = this.parsePrice(metaPrice || priceText);
-
     if (!name || !Number.isFinite(price) || price <= 0 || !this.isLdmProductUrl(pageUrl)) return null;
 
-    const sku = $('[data-sku]').attr('data-sku') ||
-      $('.product-sku, .sku').first().text().replace(/[^0-9A-Za-z-]/g, '').trim();
+    const sku = $('[data-sku]').attr('data-sku') || $('.product-sku, .sku').first().text().replace(/[^0-9A-Za-z-]/g, '').trim();
     const brand = $('[data-brand]').attr('data-brand') || $('.product-brand, .brand').first().text().trim();
-
-    return {
-      name,
-      current_price: price,
-      brand: brand || undefined,
-      sku: sku || undefined,
-      image_url: image || undefined,
-      url: normalizeProductUrl(pageUrl),
-    };
+    return { name, current_price: price, brand: brand || undefined, sku: sku || undefined, image_url: image || undefined, url: normalizeProductUrl(pageUrl) };
   }
 
   extractProductUrlsFromListing(html: string): string[] {
     const urls = new Set<string>();
     const $ = cheerio.load(html);
-
     $('a[href]').each((_i, el) => {
       const href = String($(el).attr('href') || '').trim();
       if (!href) return;
@@ -197,20 +168,33 @@ export class CrawlerService {
         // Ignore malformed anchors.
       }
     });
-
     return [...urls];
   }
 
-  private extractListingLinks(html: string, baseUrl: string): string[] {
+  /** Only follow pagination from the current listing. Never crawl every category link. */
+  private extractPaginationLinks(html: string, baseUrl: string): string[] {
     const links = new Set<string>();
+    const base = new URL(baseUrl, LDM_ORIGIN);
     const $ = cheerio.load(html);
 
     $('a[href]').each((_i, el) => {
       const href = String($(el).attr('href') || '').trim();
       if (!href) return;
       try {
-        const next = this.normalizeListingUrl(href, baseUrl);
-        if (this.isLdmListingUrl(next)) links.add(next);
+        const next = new URL(href, baseUrl);
+        if (next.protocol !== 'https:' || next.hostname !== LDM_HOST) return;
+        if (/^\/produto\//i.test(next.pathname)) return;
+        if (!/^\/(?:subcategorias|hotsite)(?:\/|$)/i.test(next.pathname)) return;
+
+        const pageMatch = next.pathname.match(/\/V\/0\/(\d+)(?:\/|$)/i);
+        const queryPage = next.searchParams.get('page');
+        if (!pageMatch && !(queryPage && /^\d+$/.test(queryPage))) return;
+
+        const sameFamily = next.pathname.startsWith(base.pathname) || base.pathname.startsWith(next.pathname);
+        if (!sameFamily) return;
+
+        next.hash = '';
+        links.add(this.normalizeListingUrl(next.toString()));
       } catch {
         // Ignore malformed/external links.
       }
@@ -242,7 +226,6 @@ export class CrawlerService {
 
       try {
         const html = await this.fetchPage(url);
-
         for (const productUrl of this.extractProductUrlsFromListing(html)) {
           if (!this.isLdmProductUrl(productUrl)) continue;
           discovered.add(productUrl);
@@ -251,9 +234,9 @@ export class CrawlerService {
 
         if (discovered.size >= target) break;
 
-        for (const next of this.extractListingLinks(html, url)) {
+        for (const next of this.extractPaginationLinks(html, url)) {
           if (visited.has(next) || queue.includes(next)) continue;
-          if (queue.length >= 500) break;
+          if (queue.length >= 100) break;
           queue.push(next);
         }
 
@@ -270,7 +253,6 @@ export class CrawlerService {
     const settings = await storage.getSettings();
     const target = 150;
     const configured = settings.crawler_target_urls?.filter(Boolean) || [];
-
     const defaults = [
       LDM_ORIGIN,
       `${LDM_ORIGIN}/subcategorias/21/224/serra-eletrica`,
@@ -280,19 +262,15 @@ export class CrawlerService {
       `${LDM_ORIGIN}/hotsite/auto-mecanica`,
     ];
 
-    // Ignore legacy /categoria/* settings. They currently return 404 and are not
-    // part of the canonical live catalog map.
     const listingUrls = [...new Set([
       ...configured.filter((url) => this.isLdmListingUrl(url)),
       ...defaults,
     ])];
-    const candidateUrls = await this.discoverProductUrls(listingUrls, target * 3);
-
+    const candidateUrls = await this.discoverProductUrls(listingUrls, target + 50);
     if (!candidateUrls.length) throw new Error('Nenhuma URL real de produto foi descoberta.');
 
     const products: RawScrapedProduct[] = [];
     const identities = new Set<string>();
-
     for (const url of candidateUrls) {
       if (products.length >= target) break;
       const raw = await this.scrapeProductPage(url);
@@ -300,7 +278,6 @@ export class CrawlerService {
 
       const originalUrl = normalizeProductUrl(raw.url);
       if (!this.isLdmProductUrl(originalUrl)) continue;
-
       const affiliateUrl = buildAffiliateUrl(originalUrl);
       if (!affiliateUrl.endsWith('/20889')) continue;
 
@@ -310,19 +287,15 @@ export class CrawlerService {
       products.push({ ...raw, url: originalUrl });
     }
 
-    if (products.length < target) {
-      throw new Error(`Coleta incompleta: ${products.length}/${target} produtos reais válidos.`);
-    }
+    if (products.length < target) throw new Error(`Coleta incompleta: ${products.length}/${target} produtos reais válidos.`);
 
     let valid = 0;
     let created = 0;
     let updated = 0;
-
     for (const raw of products) {
       const originalUrl = normalizeProductUrl(raw.url);
       const affiliateUrl = buildAffiliateUrl(originalUrl);
       const identity = generateProductIdentityKey(raw.sku, originalUrl, raw.name);
-
       const result = await storage.upsertProduct({
         product_identity_key: identity,
         product_name: raw.name,
@@ -337,14 +310,12 @@ export class CrawlerService {
         active: true,
         last_scraped_at: new Date().toISOString(),
       });
-
       valid++;
       if (result.isNew) created++;
       else updated++;
     }
 
     if (valid !== target) throw new Error(`Persistência incompleta: ${valid}/${target}.`);
-
     logger.crawler(`Coleta concluída: ${valid} produtos reais; ${created} novos; ${updated} atualizados.`);
     return { found: products.length, valid, new: created, updated };
   }
