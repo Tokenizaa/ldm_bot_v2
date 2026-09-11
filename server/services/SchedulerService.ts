@@ -119,7 +119,8 @@ export class SchedulerService {
     const settings = await storage.getSettings();
     const date = new Intl.DateTimeFormat('en-CA', { timeZone: TIME_ZONE, year: 'numeric', month: '2-digit', day: '2-digit' }).format(scheduledDate);
     const time = new Intl.DateTimeFormat('en-GB', { timeZone: TIME_ZONE, hour: '2-digit', minute: '2-digit', hour12: false }).format(scheduledDate);
-    const attempts = (pub.attempts || 0) + 1;
+    const previousAttempts = Number.isFinite(Number(pub.attempts)) ? Number(pub.attempts) : 0;
+    const attempts = Math.max(0, previousAttempts) + 1;
 
     logger.scheduler(`PROGRAM_START id=${pub.id} product=${pub.product_id} date=${date} time=${time} attempt=${attempts}`);
     const result = await facebookAutomation.schedule({ groupUrl: normalizeGroupUrl(pub.facebook_group_url || settings.facebook_group_url), content: pub.content, affiliateUrl: pub.product.affiliate_url, scheduledDate: date, scheduledTime: time });
