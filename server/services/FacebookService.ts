@@ -205,10 +205,6 @@ export class FacebookService {
       weekday: 'long', day: 'numeric', month: 'long', year: 'numeric'
     }).format(target);
 
-    const candidates = page.getByRole('gridcell').filter({ hasText: new RegExp(String(day)) });
-    const exact = candidates.filter({ has: page.locator('') });
-    void exact;
-
     const cells = await page.getByRole('gridcell').all();
     for (const cell of cells) {
       const name = ((await cell.getAttribute('aria-label')) || (await cell.innerText().catch(() => ''))).toLowerCase();
