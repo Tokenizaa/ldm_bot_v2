@@ -17,6 +17,7 @@ create table if not exists products (
   previous_price numeric,
   lowest_price numeric,
   image_url text,
+  facebook_copy text,
   active boolean default true,
   last_scraped_at timestamptz default now(),
   created_at timestamptz default now(),
