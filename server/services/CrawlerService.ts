@@ -19,10 +19,22 @@ export interface RawScrapedProduct {
 }
 
 export class CrawlerService {
+  /**
+   * Loja do Mecânico currently serves catalog HTML to a browser-like HTTP client,
+   * while the old ForgeDeals/1.0 user-agent can be challenged by the site's bot layer.
+   * Playwright is intentionally NOT part of the production crawler.
+   */
   private defaultHeaders = {
-    'User-Agent': 'ForgeDeals/1.0 (+product-crawler)',
-    Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36',
+    Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
     'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
+    'Cache-Control': 'no-cache',
+    Pragma: 'no-cache',
+    'Upgrade-Insecure-Requests': '1',
+    'Sec-Fetch-Dest': 'document',
+    'Sec-Fetch-Mode': 'navigate',
+    'Sec-Fetch-Site': 'none',
+    'Sec-Fetch-User': '?1',
   };
 
   private isLdmProductUrl(url: string): boolean {
@@ -42,7 +54,9 @@ export class CrawlerService {
       const parsed = new URL(url, LDM_ORIGIN);
       if (parsed.protocol !== 'https:' || parsed.hostname !== LDM_HOST) return false;
       if (/^\/produto\//i.test(parsed.pathname)) return false;
-      return /^\/(?:subcategorias|hotsite|categoria)(?:\/|$)/i.test(parsed.pathname);
+      // /categoria/* is legacy and currently returns 404. The live catalog uses
+      // /subcategorias/* and /hotsite/* routes.
+      return /^\/(?:subcategorias|hotsite)(?:\/|$)/i.test(parsed.pathname);
     } catch {
       return false;
     }
@@ -64,17 +78,23 @@ export class CrawlerService {
     return Number(normalized);
   }
 
-  private async fetchPage(url: string, timeoutMs = 15000): Promise<string> {
+  private async fetchPage(url: string, timeoutMs = 20000): Promise<string> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const response = await fetch(url, {
         signal: controller.signal,
-        headers: this.defaultHeaders,
+        headers: {
+          ...this.defaultHeaders,
+          Referer: LDM_ORIGIN + '/',
+        },
         redirect: 'follow',
       });
       if (!response.ok) throw new Error(`HTTP ${response.status} ao acessar ${url}`);
-      return await response.text();
+
+      const html = await response.text();
+      if (!html.trim()) throw new Error(`HTML vazio ao acessar ${url}`);
+      return html;
     } finally {
       clearTimeout(timer);
     }
@@ -260,9 +280,12 @@ export class CrawlerService {
       `${LDM_ORIGIN}/hotsite/auto-mecanica`,
     ];
 
-    // Keep valid configured seeds, but ALWAYS include current live seeds so an old
-    // system_config containing 404 /categoria/... URLs cannot block the batch.
-    const listingUrls = [...new Set([...configured, ...defaults])];
+    // Ignore legacy /categoria/* settings. They currently return 404 and are not
+    // part of the canonical live catalog map.
+    const listingUrls = [...new Set([
+      ...configured.filter((url) => this.isLdmListingUrl(url)),
+      ...defaults,
+    ])];
     const candidateUrls = await this.discoverProductUrls(listingUrls, target * 3);
 
     if (!candidateUrls.length) throw new Error('Nenhuma URL real de produto foi descoberta.');
