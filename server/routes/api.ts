@@ -11,6 +11,9 @@ import { SUPABASE_SQL_SCHEMA } from '../utils/supabaseSchema.js';
 
 export const apiRouter = Router();
 
+let crawlerRunPromise: Promise<Awaited<ReturnType<typeof crawler.run>>> | null = null;
+let crawlerStartedAt: string | null = null;
+
 export function requireAuth(req: Request, res: Response, next: NextFunction) {
   const authHeader = req.headers.authorization || (req.headers['x-auth-token'] as string);
   const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7).trim() : authHeader?.trim();
@@ -55,9 +58,32 @@ apiRouter.get('/stats', async (_req, res) => {
   } catch (err: any) { res.status(500).json({ success: false, error: err.message }); }
 });
 
+apiRouter.get('/crawler/status', (_req, res) => {
+  res.json({
+    success: true,
+    running: Boolean(crawlerRunPromise),
+    startedAt: crawlerStartedAt,
+  });
+});
+
 apiRouter.post('/crawler/run', async (_req, res) => {
-  try { res.json(await crawler.run()); }
-  catch (err: any) { logger.crawler(`Execution failed: ${err.message}`, 'error'); res.status(500).json({ success: false, error: err.message }); }
+  if (crawlerRunPromise) {
+    return res.status(409).json({ success: false, running: true, error: 'O crawler já está em execução. Aguarde a conclusão da coleta atual.' });
+  }
+
+  crawlerStartedAt = new Date().toISOString();
+  crawlerRunPromise = crawler.run();
+
+  try {
+    const result = await crawlerRunPromise;
+    return res.json({ success: true, ...result });
+  } catch (err: any) {
+    logger.crawler(`Execution failed: ${err.message}`, 'error');
+    return res.status(500).json({ success: false, error: err.message });
+  } finally {
+    crawlerRunPromise = null;
+    crawlerStartedAt = null;
+  }
 });
 
 apiRouter.get('/products', async (req, res) => {
