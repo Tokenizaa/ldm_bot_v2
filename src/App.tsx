@@ -52,6 +52,7 @@ export default function App() {
   const [isRunningCrawler, setIsRunningCrawler] = useState(false);
   const [isGeneratingBatch, setIsGeneratingBatch] = useState(false);
   const [isProcessingDue, setIsProcessingDue] = useState(false);
+  const [isSchedulingAll, setIsSchedulingAll] = useState(false);
   const [isConnectingFb, setIsConnectingFb] = useState(false);
   const [isTestingFb, setIsTestingFb] = useState(false);
 
@@ -206,6 +207,21 @@ export default function App() {
       showToast(`Erro ao gerar lote: ${err.message}`, 'error');
     } finally {
       setIsGeneratingBatch(false);
+    }
+  };
+
+  const handleScheduleAll = async () => {
+    setIsSchedulingAll(true);
+    showToast('Montando e programando automaticamente a fila de publicações...', 'info');
+    try {
+      const res = await apiRequest('/api/scheduler/generate-batch', { method: 'POST' });
+      showToast(`${res.generated || 0} publicações preparadas para o agendamento automático.`, 'success');
+      setActiveTab('schedule');
+      await fetchAllData();
+    } catch (err: any) {
+      showToast(`Erro ao programar: ${err.message}`, 'error');
+    } finally {
+      setIsSchedulingAll(false);
     }
   };
 
@@ -502,6 +518,8 @@ export default function App() {
                 setIsCopyModalOpen(true);
               }}
               onGenerateTodayBatch={handleGenerateTodayBatch}
+              onScheduleAll={handleScheduleAll}
+              isSchedulingAll={isSchedulingAll}
               isGeneratingBatch={isGeneratingBatch}
             />
           )}
