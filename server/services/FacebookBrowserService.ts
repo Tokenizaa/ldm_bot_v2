@@ -43,11 +43,7 @@ export class FacebookBrowserService {
   async page(): Promise<Page> {
     const context = await this.start();
     const existing = context.pages().find(page => !page.isClosed());
-    const page = existing || await context.newPage();
-    if (page.url() === 'about:blank') {
-      await page.goto('https://www.facebook.com/', { waitUntil: 'domcontentloaded', timeout: 60000 });
-    }
-    return page;
+    return existing || await context.newPage();
   }
 
   async cookies() {
