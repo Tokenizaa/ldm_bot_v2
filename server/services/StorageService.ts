@@ -39,7 +39,7 @@ export class StorageService {
       original_url: String(row.original_url || ''), affiliate_url: String(row.affiliate_url || ''),
       current_price: Number(row.current_price || 0), previous_price: row.previous_price != null ? Number(row.previous_price) : undefined,
       lowest_price: row.lowest_price != null ? Number(row.lowest_price) : undefined,
-      image_url: row.image_url ? String(row.image_url) : undefined, active: Boolean(row.monitored ?? true),
+      image_url: row.image_url ? String(row.image_url) : undefined, facebook_copy: row.facebook_copy ? String(row.facebook_copy) : undefined, active: Boolean(row.monitored ?? true),
       last_scraped_at: row.last_checked_at || row.created_at || new Date().toISOString(),
       created_at: row.created_at || new Date().toISOString(), updated_at: row.last_checked_at || row.created_at || new Date().toISOString()
     };
@@ -77,15 +77,16 @@ export class StorageService {
     return data ? this.mapRowToProduct(data) : undefined;
   }
 
-  async upsertProduct(product: Omit<Product, 'id' | 'created_at' | 'updated_at'> & { id?: string }): Promise<{ product: Product; isNew: boolean; priceChanged: boolean }> {
+  async upsertProduct(product: Omit<Product, 'id' | 'created_at' | 'updated_at'> & { id?: string }): Promise<{ product: Product; isNew: boolean; priceChanged: boolean; copyNeedsRegeneration: boolean }> {
     const existing = await this.getProductByIdentityKey(product.product_identity_key);
     const now = new Date().toISOString();
     if (existing) {
       const priceChanged = Math.abs(existing.current_price - product.current_price) > 0.01;
+      const copyNeedsRegeneration = !existing.facebook_copy || existing.product_name !== product.product_name || existing.brand !== product.brand || existing.category !== product.category || existing.sku !== product.sku;
       if (priceChanged) await this.addPriceHistory({ product_id: existing.id, price: product.current_price, checked_at: now });
       const updatePayload: Record<string, any> = {
         product_name: product.product_name, brand: product.brand || null, category: product.category || null,
-        sku: product.sku || null, image_url: product.image_url || null, original_url: product.original_url,
+        sku: product.sku || null, image_url: product.image_url || null, facebook_copy: product.facebook_copy || null, original_url: product.original_url,
         affiliate_url: product.affiliate_url, current_price: product.current_price,
         previous_price: priceChanged ? existing.current_price : existing.previous_price || null,
         lowest_price: Math.min(existing.lowest_price ?? product.current_price, product.current_price),
@@ -99,7 +100,7 @@ export class StorageService {
       if (error) throw new Error(`Falha ao atualizar produto em affiliate_links: ${error.message}`);
       const updated = await this.getProductById(existing.id);
       if (!updated) throw new Error(`Produto atualizado não pôde ser relido em affiliate_links: ${existing.id}`);
-      return { product: updated, isNew: false, priceChanged };
+      return { product: updated, isNew: false, priceChanged, copyNeedsRegeneration };
     }
 
     const newId = product.id || crypto.randomUUID();
@@ -117,9 +118,22 @@ export class StorageService {
       throw new Error(`Falha ao inserir produto em affiliate_links: ${error.message}`);
     }
     await this.addPriceHistory({ product_id: newId, price: product.current_price, checked_at: now });
-    return { product: this.mapRowToProduct(data), isNew: true, priceChanged: false };
+    return { product: this.mapRowToProduct(data), isNew: true, priceChanged: false, copyNeedsRegeneration: true };
   }
 
+  async updateProductCopy(productId: string, content: string): Promise<Product | undefined> {
+    const clean = content.trim();
+    if (!clean) throw new Error('Copy vazia não pode ser salva.');
+    const { error } = await this.supabase.from('affiliate_links').update({ facebook_copy: clean }).eq('id', productId);
+    if (error) throw new Error(`Falha ao salvar copy do produto: ${error.message}`);
+    return this.getProductById(productId);
+  }
+
+  async countProductsWithoutFacebookCopy(): Promise<number> {
+    const { count, error } = await this.supabase.from('affiliate_links').select('id', { count: 'exact', head: true }).or('facebook_copy.is.null,facebook_copy.eq.');
+    if (error) throw new Error(`Falha ao contar produtos sem copy: ${error.message}`);
+    return count || 0;
+  }
   async addPriceHistory(entry: Omit<PriceHistory, 'id'>): Promise<PriceHistory> {
     const record = { id: crypto.randomUUID(), affiliate_link_id: entry.product_id, price: entry.price, checked_at: entry.checked_at || new Date().toISOString() };
     const { data, error } = await this.supabase.from('affiliate_price_history').insert(record).select('*').single();
