@@ -15,20 +15,33 @@ export class FacebookPublisherService {
   constructor(private readonly facebook: FacebookService) {}
 
   private async openComposer(page: Page): Promise<boolean> {
+    // Facebook changes the composer markup frequently. Prefer semantic/accessible
+    // labels, then fall back to the visible "Escreva algo..." surface in the group.
     const triggers = [
       page.getByRole('button', { name: /Escreva algo|No que você está pensando|Criar uma publicação/i }).first(),
       page.locator('[role="button"][aria-label*="Criar uma publicação" i]').first(),
       page.locator('[role="button"][aria-label*="Escreva algo" i]').first(),
-      page.locator('div[role="button"]:has-text("Escreva algo")').first(),
-      page.locator('div[role="button"]:has-text("No que você está pensando")').first()
+      page.locator('[role="button"]').filter({ hasText: /Escreva algo|No que você está pensando|Criar uma publicação/i }).first(),
+      page.locator('div[role="button"]').filter({ hasText: /Escreva algo|No que você está pensando|Criar uma publicação/i }).first(),
+      page.getByText(/Escreva algo|No que você está pensando|Criar uma publicação/i, { exact: false }).first()
     ];
 
     for (const trigger of triggers) {
       if (!(await trigger.count().catch(() => 0))) continue;
       if (!(await trigger.isVisible().catch(() => false))) continue;
+
       await trigger.scrollIntoViewIfNeeded().catch(() => undefined);
-      await trigger.click({ timeout: 10000 });
-      await page.waitForTimeout(1000);
+      try {
+        await trigger.click({ timeout: 10000 });
+      } catch {
+        // Some Facebook surfaces are nested/covered. Click the center point as
+        // a final interaction fallback without closing or changing the profile.
+        const box = await trigger.boundingBox().catch(() => null);
+        if (!box) continue;
+        await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+      }
+
+      await page.waitForTimeout(1200);
       if (await this.getComposerTextbox(page).count()) return true;
     }
 
@@ -145,10 +158,12 @@ export class FacebookPublisherService {
     await page.goto(groupUrl, { waitUntil: 'domcontentloaded', timeout: 35000 });
     await page.waitForTimeout(1500);
 
-    if (!(await this.facebook.isGroupComposerAvailable(page))) {
-      return { success: false, message: 'Composer do grupo não foi encontrado.' };
+    // Do not preflight the composer with a brittle selector. The group page is
+    // the source of truth; open the real composer and inspect the resulting dialog.
+    if (!(await this.openComposer(page))) {
+      logger.facebook('Composer não abriu. Navegador mantido aberto para diagnóstico.', 'error');
+      return { success: false, message: 'Não foi possível abrir o composer do grupo.' };
     }
-    if (!(await this.openComposer(page))) return { success: false, message: 'Não foi possível abrir o composer.' };
 
     const content = this.buildTestContent(product);
     if (!(await this.fillComposer(page, content))) {
