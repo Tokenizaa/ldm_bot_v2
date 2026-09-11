@@ -31,6 +31,9 @@ export interface Publication {
   facebook_post_url?: string;
   published_at?: string;
   error_message?: string;
+  attempts?: number;
+  max_attempts?: number;
+  next_attempt_at?: string;
   created_at: string;
   updated_at: string;
 }
