@@ -11,8 +11,8 @@ export interface NvidiaGenerationResult {
 
 export class NvidiaAIService {
   private readonly apiUrl = 'https://integrate.api.nvidia.com/v1/chat/completions';
-  private readonly defaultModel = process.env.NVIDIA_MODEL || 'meta/llama-3.2-11b-vision-instruct';
-  private readonly activeFallbackModel = 'meta/llama-3.2-11b-vision-instruct';
+  private readonly defaultModel = process.env.NVIDIA_MODEL || 'meta/llama-3.3-70b-instruct';
+  private readonly activeFallbackModel = 'meta/llama-3.1-8b-instruct';
 
   isConfigured(): boolean {
     return Boolean(process.env.NVIDIA_API_KEY?.trim());
@@ -20,7 +20,7 @@ export class NvidiaAIService {
 
   async generateRawCopy(systemPrompt: string, userPrompt: string, customModel?: string): Promise<NvidiaGenerationResult> {
     const apiKey = process.env.NVIDIA_API_KEY?.trim();
-    const model = customModel || process.env.NVIDIA_MODEL || this.defaultModel;
+    const model = customModel && customModel !== 'unknown' ? customModel : (process.env.NVIDIA_MODEL || this.defaultModel);
 
     if (!apiKey) return { content: '', model, success: false, error: 'NVIDIA_API_KEY não configurada.' };
 
@@ -42,7 +42,7 @@ export class NvidiaAIService {
         })
       });
 
-      if (!response.ok) throw new Error(`NVIDIA API HTTP ${response.status}: ${(await response.text()).slice(0, 300)}`);
+      if (!response.ok) {\n        if (response.status === 404 && model !== this.activeFallbackModel) {\n          logger.ai(`Modelo NVIDIA ${model} não disponível (HTTP 404). Usando ${this.activeFallbackModel}.`, 'warn');\n          return this.generateRawCopy(systemPrompt, userPrompt, this.activeFallbackModel);\n        }\n        throw new Error(`NVIDIA API HTTP ${response.status}: ${(await response.text()).slice(0, 300)}`);\n      }
 
       const data = await response.json() as any;
       const content = String(data.choices?.[0]?.message?.content || '').trim();
