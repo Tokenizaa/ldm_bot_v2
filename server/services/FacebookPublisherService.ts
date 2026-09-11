@@ -41,7 +41,7 @@ export class FacebookPublisherService {
       '[role="dialog"] [contenteditable="true"], ' +
       '[role="dialog"] textarea, ' +
       '[role="dialog"] input[role="textbox"]'
-    ).filter({ visible: true }).first();
+    ).first();
   }
 
   private async fillComposer(page: Page, content: string): Promise<boolean> {
