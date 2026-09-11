@@ -19,6 +19,12 @@ export interface FacebookScheduleResult {
   error?: string;
 }
 
+export interface FacebookPublishInput {
+  groupUrl: string;
+  content: string;
+  affiliateUrl: string;
+}
+
 class FacebookAutomationService {
   private chain: Promise<void> = Promise.resolve();
 
@@ -271,6 +277,48 @@ class FacebookAutomationService {
         return { success: true, scheduledAt };
       } catch (error: any) {
         this.log('SCHEDULE_FAILED', 'error=' + error.message + ' durationMs=' + (Date.now() - startedAt), 'error');
+        return { success: false, error: error.message };
+      }
+    });
+  }
+
+  async publish(input: FacebookPublishInput): Promise<FacebookScheduleResult> {
+    return this.serial(async () => {
+      const startedAt = Date.now();
+      this.log('PUBLISH_START', 'publicação imediata iniciada');
+      try {
+        if (!input.groupUrl?.includes('/groups/')) throw new Error('FACEBOOK_GROUP_URL_INVALID');
+        if (!input.affiliateUrl?.includes('/20889')) throw new Error('FACEBOOK_AFFILIATE_URL_INVALID');
+        if (!input.content?.trim() || /https?:\/\//i.test(input.content) || /R\$/i.test(input.content)) {
+          throw new Error('FACEBOOK_CONTENT_INVALID');
+        }
+
+        await facebookSession.requireAuthenticated();
+        this.log('SESSION_OK', 'sessão existente reutilizada');
+
+        const page = await facebookBrowser.page();
+        await this.goToGroup(page, input.groupUrl);
+        await this.openComposer(page);
+        await this.generateLinkPreview(page, input.content, input.affiliateUrl);
+
+        const dialog = page.locator('[role="dialog"]').last();
+        const publish = dialog.getByRole('button', { name: /^(Publicar|Postar)$/i }).last();
+        this.log('PUBLISH_BUTTON_SEARCH', 'count=' + await publish.count() + ' visible=' + await publish.isVisible().catch(() => false));
+        if (!(await publish.count()) || !await publish.isVisible().catch(() => false) || await publish.isDisabled().catch(() => false)) {
+          throw new Error('FACEBOOK_PUBLISH_BUTTON_NOT_READY');
+        }
+
+        await this.clickCanonical(publish, 'FACEBOOK_PUBLISH_CLICK_FAILED');
+        await page.waitForTimeout(2000);
+
+        const body = (await page.locator('body').innerText().catch(() => '')).toLowerCase();
+        const confirmed = /publicad|postad|publicado|postado/.test(body) || await page.locator('[role="dialog"]:visible').count() === 0;
+        if (!confirmed) throw new Error('FACEBOOK_PUBLISH_CONFIRMATION_FAILED');
+
+        this.log('PUBLISH_CONFIRMED', 'publicação imediata confirmada durationMs=' + (Date.now() - startedAt), 'success');
+        return { success: true };
+      } catch (error: any) {
+        this.log('PUBLISH_FAILED', 'error=' + error.message + ' durationMs=' + (Date.now() - startedAt), 'error');
         return { success: false, error: error.message };
       }
     });
