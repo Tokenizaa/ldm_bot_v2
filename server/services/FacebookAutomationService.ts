@@ -128,60 +128,89 @@ class FacebookAutomationService {
     this.log('PREVIEW_READY', 'URL removida do texto após tentativa de preview');
   }
 
-  private async openScheduleMenu(page: Page) {
-    this.log('MORE_OPTIONS_SEARCH', 'procurando Mais opções de post');
-    const button = page.getByRole('button', {
-      name: /Mais opções de post|Mais opções|More options(?: for post)?/i
-    }).last();
+  private async openScheduleDirect(page: Page) {
+    this.log('SCHEDULE_BUTTON_SEARCH', 'procurando botão canônico Programar post diretamente no composer');
 
-    this.log('MORE_OPTIONS_STATE', 'count=' + await button.count() + ' visible=' + await button.isVisible().catch(() => false));
-    if (!(await button.count()) || !(await button.isVisible().catch(() => false))) {
-      const visibleButtons = await page.getByRole('button').evaluateAll(nodes => nodes.filter(node => {
-        const el = node as HTMLElement;
-        return !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
-      }).map(node => ((node as HTMLElement).innerText || node.getAttribute('aria-label') || '').trim()).filter(Boolean).slice(-20)).catch(() => []);
-      this.log('MORE_OPTIONS_CANDIDATES', JSON.stringify(visibleButtons));
-      throw new Error('FACEBOOK_MORE_OPTIONS_NOT_FOUND');
+    const dialog = page.locator('[role="dialog"][aria-label="Criar post"]').last();
+    const scheduleButton = dialog.locator('[aria-label="Programar post"]').last();
+    const publishButton = dialog.locator('[aria-label="Postar"]').last();
+
+    this.log(
+      'SCHEDULE_BUTTON_STATE',
+      'schedule_count=' + await scheduleButton.count() +
+      ' schedule_visible=' + await scheduleButton.isVisible().catch(() => false) +
+      ' publish_count=' + await publishButton.count() +
+      ' publish_visible=' + await publishButton.isVisible().catch(() => false)
+    );
+
+    if (!(await scheduleButton.count()) || !(await scheduleButton.isVisible().catch(() => false))) {
+      const candidates = await dialog.getByRole('button').evaluateAll(nodes =>
+        nodes.map(node => ({
+          text: ((node as HTMLElement).innerText || '').trim(),
+          ariaLabel: node.getAttribute('aria-label'),
+          disabled: (node as HTMLButtonElement).disabled,
+          visible: !!((node as HTMLElement).offsetWidth || (node as HTMLElement).offsetHeight || node.getClientRects().length)
+        }))
+      ).catch(() => []);
+
+      this.log('SCHEDULE_BUTTON_CANDIDATES', JSON.stringify(candidates), 'error');
+      throw new Error('FACEBOOK_SCHEDULE_DIRECT_BUTTON_NOT_FOUND');
     }
 
-    await this.clickCanonical(button, 'FACEBOOK_MORE_OPTIONS_CLICK_FAILED');
-    await page.waitForTimeout(500);
-    this.log('MORE_OPTIONS_OPENED', 'menu aberto');
+    const scheduleAria = await scheduleButton.getAttribute('aria-label');
+    const publishAria = await publishButton.getAttribute('aria-label').catch(() => null);
 
-    const schedule = page.getByRole('menuitem', {
-      name: /Programar post|Agendar post|Schedule post/i
-    }).last();
+    this.log(
+      'SCHEDULE_BUTTON_CANONICAL',
+      'schedule_aria=' + scheduleAria +
+      ' publish_aria=' + publishAria +
+      ' direct=true more_options=false'
+    );
 
-    if (await schedule.count() && await schedule.isVisible().catch(() => false)) {
-      await this.clickCanonical(schedule, 'FACEBOOK_SCHEDULE_OPTION_CLICK_FAILED');
-    } else {
-      const textOption = page.getByText(/Programar post|Agendar post|Schedule post/i).last();
-      await this.clickCanonical(textOption, 'FACEBOOK_SCHEDULE_OPTION_NOT_FOUND');
-    }
-
+    await this.clickCanonical(scheduleButton, 'FACEBOOK_SCHEDULE_DIRECT_BUTTON_CLICK_FAILED');
     await page.waitForTimeout(700);
-    this.log('SCHEDULE_FORM_OPENED', 'formulário de agendamento aberto');
+    this.log('SCHEDULE_FORM_OPENED', 'fluxo aberto diretamente pelo botão Programar post');
   }
-
   private async setDate(page: Page, date: string) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error('FACEBOOK_DATE_INVALID');
-    const field = page.locator('input[type="date"]').last();
-    if (!(await field.count()) || !(await field.isVisible().catch(() => false))) {
-      throw new Error('FACEBOOK_DATE_FIELD_NOT_FOUND');
+
+    const target = new Date(date + 'T12:00:00');
+    const label = target.toLocaleDateString('pt-BR', {
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric'
+    });
+
+    const dialog = page.locator('[role="dialog"]').last();
+    const cell = dialog.getByRole('gridcell', { name: label, exact: true }).last();
+
+    this.log('DATE_SEARCH', 'label=' + label + ' count=' + await cell.count());
+
+    if (!(await cell.count()) || !(await cell.isVisible().catch(() => false))) {
+      const candidates = await dialog.getByRole('gridcell').allTextContents().catch(() => []);
+      this.log('DATE_CANDIDATES', JSON.stringify(candidates.slice(-30)), 'error');
+      throw new Error('FACEBOOK_DATE_CELL_NOT_FOUND');
     }
-    await field.fill(date);
-    await field.press('Tab').catch(() => undefined);
-    this.log('DATE_SET', 'date=' + date);
+
+    await this.clickCanonical(cell, 'FACEBOOK_DATE_CLICK_FAILED');
+    this.log('DATE_SET', 'date=' + date + ' label=' + label);
   }
 
   private async setTime(page: Page, time: string) {
     if (!/^\d{2}:\d{2}$/.test(time)) throw new Error('FACEBOOK_TIME_INVALID');
-    const field = page.locator('input[type="time"]').last();
-    if (!(await field.count()) || !(await field.isVisible().catch(() => false))) {
-      throw new Error('FACEBOOK_TIME_FIELD_NOT_FOUND');
+
+    const dialog = page.locator('[role="dialog"]').last();
+    const option = dialog.getByRole('option', { name: time, exact: true }).last();
+
+    this.log('TIME_SEARCH', 'time=' + time + ' count=' + await option.count());
+
+    if (!(await option.count()) || !(await option.isVisible().catch(() => false))) {
+      const candidates = await dialog.getByRole('option').allTextContents().catch(() => []);
+      this.log('TIME_CANDIDATES', JSON.stringify(candidates.slice(-50)), 'error');
+      throw new Error('FACEBOOK_TIME_OPTION_NOT_FOUND');
     }
-    await field.fill(time);
-    await field.press('Tab').catch(() => undefined);
+
+    await this.clickCanonical(option, 'FACEBOOK_TIME_CLICK_FAILED');
     this.log('TIME_SET', 'time=' + time);
   }
 
@@ -232,7 +261,7 @@ class FacebookAutomationService {
         await this.goToGroup(page, input.groupUrl);
         await this.openComposer(page);
         await this.generateLinkPreview(page, input.content, input.affiliateUrl);
-        await this.openScheduleMenu(page);
+        await this.openScheduleDirect(page);
         await this.setDate(page, input.scheduledDate);
         await this.setTime(page, input.scheduledTime);
         await this.confirmSchedule(page);
