@@ -64,12 +64,12 @@ export class SchedulerService {
       !usedProducts.has(p.id) &&
       p.current_price > 0 &&
       !!p.product_name &&
-      /^https?:\\/\\//i.test(p.original_url) &&
-      /^https?:\\/\\//i.test(p.affiliate_url) &&
+      /^https?:\/\/i.test(p.original_url) &&
+      /^https?:\/\/i.test(p.affiliate_url) &&
       p.affiliate_url.includes('/20889') &&
       !!p.facebook_copy?.trim() &&
-      !/https?:\\/\\//i.test(p.facebook_copy) &&
-      !/R\\$/i.test(p.facebook_copy)
+      !/https?:\/\/i.test(p.facebook_copy) &&
+      !/R\$/i.test(p.facebook_copy)
     );
 
     if (!candidates.length) {
@@ -140,7 +140,7 @@ export class SchedulerService {
     if (!pub.product?.affiliate_url?.includes('/20889')) {
       throw new Error('Produto sem link afiliado /20889 válido.');
     }
-    if (!pub.content?.trim() || /https?:\\/\\//i.test(pub.content) || /R\\$/i.test(pub.content)) {
+    if (!pub.content?.trim() || /https?:\/\/i.test(pub.content) || /R\$/i.test(pub.content)) {
       throw new Error('Publicação bloqueada: copy contém URL ou preço.');
     }
 
