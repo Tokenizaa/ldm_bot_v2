@@ -73,7 +73,7 @@ export class SchedulerService {
       const publication = await storage.createPublication({
         product_id: product.id,
         scheduled_at: localDate.toISOString(),
-        status: 'scheduled',
+        status: 'pending',
         content: product.facebook_copy!.trim(),
         facebook_group_url: settings.facebook_group_url
       });
@@ -115,7 +115,7 @@ export class SchedulerService {
   async schedulePublication(publicationId: string): Promise<Publication | undefined> {
     const pub = await storage.getPublicationById(publicationId);
     if (!pub) throw new Error('Publicação não encontrada.');
-    if (!['scheduled', 'failed'].includes(pub.status)) throw new Error('Somente publicações pendentes ou falhadas podem ser programadas.');
+    if (!['pending', 'scheduled', 'failed'].includes(pub.status)) throw new Error('Somente publicações pendentes ou falhadas podem ser programadas.');
     if (!pub.product?.affiliate_url?.includes('/20889')) throw new Error('Produto sem link afiliado /20889 válido.');
     if (!pub.content?.trim() || /https?:\/\//i.test(pub.content) || /R\$/i.test(pub.content)) {
       throw new Error('Publicação bloqueada: copy contém URL ou preço.');
