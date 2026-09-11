@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Clock, CheckCircle2, AlertCircle, XCircle, RotateCw, ExternalLink, Eye, Trash2, CalendarCheck } from 'lucide-react';
 import { Publication, PublicationStatus } from '../types';
 
@@ -13,7 +13,6 @@ interface ScheduleTabProps {
 
 export const ScheduleTab: React.FC<ScheduleTabProps> = ({ publications, onRetry, onDelete, onViewDetails, onScheduleAll, isSchedulingAll }) => {
   const [filterStatus, setFilterStatus] = useState('all');
-  const [reschedulingId, setReschedulingId] = useState<string | null>(null);
   const [newScheduleTime, setNewScheduleTime] = useState('');
   const filtered = publications.filter(p => filterStatus === 'all' || p.status === filterStatus);
 
