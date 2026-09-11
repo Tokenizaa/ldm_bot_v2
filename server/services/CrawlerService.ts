@@ -87,10 +87,6 @@ export class CrawlerService {
     }
   }
 
-  /**
-   * Descobre apenas categorias de primeiro nível a partir da navegação real da Home.
-   * Nunca usa /categoria (rota antiga) nem /subcategorias nesta etapa.
-   */
   extractCategoryUrls(html: string): string[] {
     const categories = new Set<string>();
     const $ = cheerio.load(html);
@@ -110,10 +106,6 @@ export class CrawlerService {
     return [...categories];
   }
 
-  /**
-   * Extrai somente o que existe no card do grid.
-   * Não abre produto individual, não usa JSON-LD e não usa OpenGraph.
-   */
   extractProductsFromGrid(html: string): RawScrapedProduct[] {
     const products: RawScrapedProduct[] = [];
     const seenUrls = new Set<string>();
@@ -159,10 +151,6 @@ export class CrawlerService {
     return products;
   }
 
-  /**
-   * Mantido para compatibilidade com chamadas existentes, mas propositalmente
-   * não abre páginas individuais. A coleta de produção é feita pelo grid.
-   */
   async scrapeProductPage(_url: string): Promise<RawScrapedProduct | null> {
     return null;
   }
@@ -179,7 +167,19 @@ export class CrawlerService {
 
     const products: RawScrapedProduct[] = [];
     const identities = new Set<string>();
+    const originalUrls = new Set<string>();
     const visitedCategories = new Set<string>();
+
+    // Evita violar a constraint única de original_url quando um produto já existe
+    // no Supabase, mesmo que seu SKU/identity key tenha mudado.
+    const existingProducts = await storage.getProducts();
+    for (const existing of existingProducts) {
+      try {
+        originalUrls.add(normalizeProductUrl(existing.original_url));
+      } catch {
+        // Ignore legacy/malformed rows.
+      }
+    }
 
     for (const categoryUrl of discoveredCategories) {
       if (products.length >= TARGET_PRODUCTS) break;
@@ -197,10 +197,12 @@ export class CrawlerService {
           const originalUrl = normalizeProductUrl(raw.url);
           const affiliateUrl = buildAffiliateUrl(originalUrl);
           if (!this.isLdmProductUrl(originalUrl) || !affiliateUrl.endsWith('/20889')) continue;
+          if (originalUrls.has(originalUrl)) continue;
 
           const identity = generateProductIdentityKey(raw.sku, originalUrl, raw.name);
           if (identities.has(identity)) continue;
           identities.add(identity);
+          originalUrls.add(originalUrl);
           products.push({ ...raw, url: originalUrl });
           added++;
         }
@@ -234,6 +236,7 @@ export class CrawlerService {
         affiliate_url: affiliateUrl,
         current_price: raw.current_price,
         active: true,
+        last_scraped_at: new Date().toISOString(),
       });
 
       valid++;
