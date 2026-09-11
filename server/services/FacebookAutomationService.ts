@@ -23,7 +23,7 @@ class FacebookAutomationService {
   }
 
   private composer(page: Page): Locator {
-    return page.locator("[aria-label='Escreva algo...'], [aria-label='No que você está pensando?'], [aria-label='Criar publicação']").filter({ visible: true }).first();
+    return page.locator("[aria-label='Escreva algo...']:visible, [aria-label='No que você está pensando?']:visible, [aria-label='Criar publicação']:visible").first();
   }
 
   private editor(page: Page): Locator {
@@ -39,13 +39,11 @@ class FacebookAutomationService {
 
   private async waitForGroupReady(page: Page, groupUrl: string) {
     const deadline = Date.now() + 20000;
-    let lastUrl = page.url();
     while (Date.now() < deadline) {
-      lastUrl = page.url();
       if (this.isGroupPage(page, groupUrl)) {
         const title = await page.title().catch(() => '');
         if (/A Loja Do Mecânico/i.test(title) || await page.locator('main').count() > 0) {
-          this.log('GROUP_READY', `url=${lastUrl} title=${title}`);
+          this.log('GROUP_READY', `url=${page.url()} title=${title}`);
           return;
         }
       }
@@ -80,39 +78,28 @@ class FacebookAutomationService {
     };
   }
 
-  private async waitForComposer(page: Page): Promise<Locator> {
+  private async waitForComposer(page: Page, groupUrl: string): Promise<Locator> {
     const deadline = Date.now() + 20000;
     this.log('COMPOSER_WAIT', 'procurando gatilho real do compositor');
 
     while (Date.now() < deadline) {
-      const exact = page.locator("[aria-label='Escreva algo...']:visible").first();
-      if (await exact.count()) {
-        this.log('COMPOSER_FOUND', "selector=[aria-label='Escreva algo...']");
-        return exact;
+      const trigger = this.composer(page);
+      if (await trigger.count() && await trigger.isVisible().catch(() => false)) {
+        this.log('COMPOSER_FOUND', `aria=${await trigger.getAttribute('aria-label').catch(() => '')}`);
+        return trigger;
       }
-
-      const fallback = page.locator("[aria-label='No que você está pensando?']:visible, [aria-label='Criar publicação']:visible").first();
-      if (await fallback.count()) {
-        this.log('COMPOSER_FOUND', 'selector=accessibility-fallback');
-        return fallback;
-      }
-
-      // Facebook sometimes hydrates the composer after the initial group shell.
       await page.waitForTimeout(1000);
     }
 
-    const diagnostic = await this.composerDiagnostics(page);
-    this.log('COMPOSER_DIAGNOSTIC', JSON.stringify(diagnostic), 'warn');
-
-    // One bounded recovery only: reload the already authenticated group page and retry hydration.
+    this.log('COMPOSER_DIAGNOSTIC', JSON.stringify(await this.composerDiagnostics(page)), 'warn');
     this.log('COMPOSER_RECOVERY', 'recarregando uma vez a página do grupo para recuperar o compositor', 'warn');
     await page.reload({ waitUntil: 'domcontentloaded', timeout: 60000 });
-    await this.waitForGroupReady(page, page.url());
+    await this.waitForGroupReady(page, groupUrl);
 
-    const recovered = page.locator("[aria-label='Escreva algo...']:visible, [aria-label='No que você está pensando?']:visible, [aria-label='Criar publicação']:visible").first();
+    const recovered = this.composer(page);
     await recovered.waitFor({ state: 'visible', timeout: 15000 }).catch(() => undefined);
     if (await recovered.count() && await recovered.isVisible().catch(() => false)) {
-      this.log('COMPOSER_RECOVERED', 'compositor encontrado após recuperação');
+      this.log('COMPOSER_RECOVERED', `aria=${await recovered.getAttribute('aria-label').catch(() => '')}`);
       return recovered;
     }
 
@@ -120,13 +107,13 @@ class FacebookAutomationService {
     throw new Error('FACEBOOK_COMPOSER_NOT_AVAILABLE');
   }
 
-  private async openComposer(page: Page) {
-    const trigger = await this.waitForComposer(page);
+  private async openComposer(page: Page, groupUrl: string) {
+    const trigger = await this.waitForComposer(page, groupUrl);
     await trigger.scrollIntoViewIfNeeded().catch(() => undefined);
     this.log('COMPOSER_CLICK', `aria=${await trigger.getAttribute('aria-label').catch(() => '')}`);
     await trigger.click({ timeout: 15000 });
 
-    const dialog = page.locator("div[role='dialog']").filter({ has: page.locator('[role="textbox"]') }).last();
+    const dialog = page.locator("div[role='dialog']:visible").filter({ has: page.locator('[role="textbox"]') }).last();
     await dialog.waitFor({ state: 'visible', timeout: 15000 });
     const editor = this.editor(page);
     await editor.waitFor({ state: 'visible', timeout: 15000 });
@@ -150,7 +137,7 @@ class FacebookAutomationService {
     while (Date.now() < previewDeadline) {
       const text = await editor.textContent().catch(() => '');
       const dialogText = await page.locator('[role="dialog"]:visible').innerText().catch(() => '');
-      if (text?.includes(affiliateUrl) && (dialogText.includes('Loja') || dialogText.includes('R$') || dialogText.includes('mecânico') || await page.locator('[role="dialog"]:visible img').count() > 0)) break;
+      if (text?.includes(affiliateUrl) && (dialogText.includes('Loja') || dialogText.includes('mecânico') || await page.locator('[role="dialog"]:visible img').count() > 0)) break;
       await page.waitForTimeout(1000);
     }
 
@@ -224,7 +211,7 @@ class FacebookAutomationService {
         await facebookSession.requireAuthenticated();
         const page = await facebookBrowser.page();
         await this.goToGroup(page, input.groupUrl);
-        await this.openComposer(page);
+        await this.openComposer(page, input.groupUrl);
         await this.generateLinkPreview(page, input.content, input.affiliateUrl);
         await this.openScheduleDirect(page);
         await this.setDate(page, input.scheduledDate);
