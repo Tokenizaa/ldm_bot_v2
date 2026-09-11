@@ -99,8 +99,11 @@ export class AuthService {
     if (!validation.success) return validation;
     if (!supabase) return { success: false, error: 'Supabase Auth não está configurado.' };
 
-    const expectedKey = process.env.ADMIN_SETUP_KEY?.trim();
-    if (!expectedKey || !setupKey || !crypto.timingSafeEqual(Buffer.from(setupKey), Buffer.from(expectedKey))) {
+    const expectedKey = process.env.ADMIN_SETUP_KEY?.trim() || '';
+    const providedKey = String(setupKey || '');
+    const keyMatches = expectedKey.length > 0 && providedKey.length === expectedKey.length
+      && crypto.timingSafeEqual(Buffer.from(providedKey), Buffer.from(expectedKey));
+    if (!keyMatches) {
       return { success: false, error: 'Chave de configuração inválida.' };
     }
 
