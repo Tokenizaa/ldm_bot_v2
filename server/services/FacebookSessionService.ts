@@ -27,7 +27,7 @@ export class FacebookSessionService {
   /** Called once by server startup. Opens the existing persistent browser and waits for manual login only if necessary. */
   async start(): Promise<FacebookSessionStatus> {
     try {
-      const page = await facebookBrowser.facebookPage();
+      const page = await facebookBrowser.page();
       if (await this.hasSession() && !(await this.isLoginPage())) {
         this.status = { ...this.status, connected: true, status: 'connected', connected_user: 'Conta Facebook autenticada', last_authenticated_at: new Date().toISOString(), details: 'Sessão recuperada do perfil persistente.' };
         return this.getStatus();
