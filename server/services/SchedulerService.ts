@@ -49,7 +49,7 @@ export class SchedulerService {
       const content = product.facebook_copy?.trim() || (await contentService.generateCopyForProduct(product, settings.nvidia_model)).content.trim();
       if (!content || /https?:\/\//i.test(content) || /R\$/i.test(content)) { logger.scheduler(`Conteúdo rejeitado para ${product.product_name}: copy canônica inválida.`, 'error'); continue; }
       const publication = await storage.createPublication({ product_id: product.id, scheduled_at: localDate.toISOString(), status: 'scheduled', content, facebook_group_url: settings.facebook_group_url });
-      const result = await facebookService.publishScheduledPublication({ groupUrl: settings.facebook_group_url, content: generated.content, affiliateUrl: product.affiliate_url, scheduledDate: datePrefix, scheduledTime: time });
+      const result = await facebookService.publishScheduledPublication({ groupUrl: settings.facebook_group_url, content, affiliateUrl: product.affiliate_url, scheduledDate: datePrefix, scheduledTime: time });
       if (result.success) { scheduled.push(publication); logger.scheduler(`Publicação ${publication.id} agendada no Facebook para ${result.scheduledAt || localDate.toISOString()}.`); }
       else { await storage.updatePublication(publication.id, { status: 'failed', error_message: result.error || 'Facebook não confirmou o agendamento.' }); logger.scheduler(`Falha ao agendar ${publication.id}: ${result.error || 'erro desconhecido'}`, 'error'); }
     }
