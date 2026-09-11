@@ -10,7 +10,9 @@ const CONFIRMED = ['scheduled', 'published'] as const;
 function localIso(date: string, time: string): string { return new Date(`${date}T${time}:00-03:00`).toISOString(); }
 function localDateString(date: Date): string { return new Intl.DateTimeFormat('en-CA', { timeZone: TIME_ZONE, year: 'numeric', month: '2-digit', day: '2-digit' }).format(date); }
 function monthDates(year: number, month: number): string[] { const result: string[] = []; const last = new Date(Date.UTC(year, month, 0)).getUTCDate(); for (let day = 1; day <= last; day++) result.push(`${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`); return result; }
-function idempotencyKey(productId: string, groupUrl: string, scheduledAt: string): string { return `${productId}:${groupUrl}:${scheduledAt}`; }
+function normalizeGroupUrl(groupUrl: string): string { return groupUrl.trim().replace(/\/+$/, ''); }
+function normalizeScheduledAt(value: string): string { const parsed = new Date(value); if (Number.isNaN(parsed.getTime())) return value.trim(); return parsed.toISOString(); }
+function idempotencyKey(productId: string, groupUrl: string, scheduledAt: string): string { return `${productId}:${normalizeGroupUrl(groupUrl)}:${normalizeScheduledAt(scheduledAt)}`; }
 
 export class SchedulerService {
   async ensureMonthlySchedule(targetDateStr?: string): Promise<{ scheduled: Publication[]; quota: OperationalQuota; message: string }> {
@@ -24,14 +26,16 @@ export class SchedulerService {
     logger.scheduler(`MONTHLY_SCAN month=${monthPrefix} localNow=${localDateString(now)}`);
 
     const confirmed = all.filter(p => (CONFIRMED as readonly string[]).includes(p.status) && !p.error_message && (p.published_at || p.scheduled_at));
-    const reservedMonth = confirmed.filter(p => (p.published_at || p.scheduled_at || '').startsWith(monthPrefix)).length;
+    const reservedMonth = confirmed.filter(p => (p.published_at || p.scheduled_at || '').startsWith(monthPrefix) || localDateString(new Date(p.published_at || p.scheduled_at)).startsWith(monthPrefix)).length;
     if (reservedMonth >= settings.monthly_limit) return { scheduled: [], quota: await storage.getQuota(), message: `Meta mensal já preenchida (${reservedMonth}/${settings.monthly_limit}).` };
 
     const hours = settings.daily_hours?.length ? settings.daily_hours : DEFAULT_HOURS;
     const usedProducts = new Set(confirmed.map(p => p.product_id));
-    const usedSlots = new Set(confirmed.filter(p => (p.scheduled_at || '').startsWith(monthPrefix)).map(p => p.scheduled_at));
+    const usedSlots = new Set(confirmed.filter(p => localDateString(new Date(p.scheduled_at)).startsWith(monthPrefix)).map(p => normalizeScheduledAt(p.scheduled_at)));
     const existingByKey = new Map<string, Publication>();
-    for (const publication of all) existingByKey.set(idempotencyKey(publication.product_id, publication.facebook_group_url || settings.facebook_group_url, publication.scheduled_at), publication);
+    for (const publication of all) {
+      existingByKey.set(idempotencyKey(publication.product_id, publication.facebook_group_url || settings.facebook_group_url, publication.scheduled_at), publication);
+    }
 
     const products = await storage.getProducts(true);
     const candidates = products.filter(p =>
@@ -53,7 +57,7 @@ export class SchedulerService {
         if (reservedMonth + scheduled.filter(p => p.status === 'scheduled').length >= settings.monthly_limit) break;
         const slotIso = localIso(date, time);
         if (new Date(slotIso).getTime() <= Date.now() || usedSlots.has(slotIso)) continue;
-        const dayCount = [...usedSlots].filter(v => v.startsWith(date)).length;
+        const dayCount = [...usedSlots].filter(v => localDateString(new Date(v)) === date).length;
         if (dayCount >= settings.daily_limit) break;
 
         while (candidateIndex < candidates.length && usedProducts.has(candidates[candidateIndex].id)) candidateIndex++;
@@ -66,7 +70,7 @@ export class SchedulerService {
           logger.scheduler(`QUEUE_REUSE id=${publication.id} product=${product.id} slot=${date}T${time} status=${publication.status}`);
           if (publication.status === 'scheduled' || publication.status === 'published') {
             usedProducts.add(product.id);
-            usedSlots.add(publication.scheduled_at);
+            usedSlots.add(normalizeScheduledAt(publication.scheduled_at));
             scheduled.push(publication);
             continue;
           }
@@ -77,7 +81,7 @@ export class SchedulerService {
             scheduled_at: slotIso,
             status: 'draft',
             content: product.facebook_copy!.trim(),
-            facebook_group_url: settings.facebook_group_url
+            facebook_group_url: normalizeGroupUrl(settings.facebook_group_url)
           });
           existingByKey.set(key, publication);
           logger.scheduler(`QUEUE_CREATED id=${publication.id} product=${product.id} slot=${date}T${time}`);
@@ -88,7 +92,7 @@ export class SchedulerService {
           scheduled.push(result);
           if (result.status === 'scheduled') {
             usedProducts.add(product.id);
-            usedSlots.add(result.scheduled_at);
+            usedSlots.add(normalizeScheduledAt(result.scheduled_at));
           }
         }
       }
@@ -116,7 +120,7 @@ export class SchedulerService {
     const attempts = (pub.attempts || 0) + 1;
 
     logger.scheduler(`PROGRAM_START id=${pub.id} product=${pub.product_id} date=${date} time=${time} attempt=${attempts}`);
-    const result = await facebookAutomation.schedule({ groupUrl: pub.facebook_group_url || settings.facebook_group_url, content: pub.content, affiliateUrl: pub.product.affiliate_url, scheduledDate: date, scheduledTime: time });
+    const result = await facebookAutomation.schedule({ groupUrl: normalizeGroupUrl(pub.facebook_group_url || settings.facebook_group_url), content: pub.content, affiliateUrl: pub.product.affiliate_url, scheduledDate: date, scheduledTime: time });
     if (!result.success) {
       logger.scheduler(`PROGRAM_FAILED id=${pub.id} error=${result.error || 'unknown'}`, 'error');
       return storage.updatePublication(pub.id, { status: 'failed', attempts, error_message: result.error || 'Facebook não confirmou o agendamento.' });
