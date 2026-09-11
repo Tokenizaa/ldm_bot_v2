@@ -168,14 +168,18 @@ export class CrawlerService {
     const products: RawScrapedProduct[] = [];
     const identities = new Set<string>();
     const originalUrls = new Set<string>();
+    const existingIdentityByUrl = new Map<string, string>();
     const visitedCategories = new Set<string>();
 
-    // Evita violar a constraint única de original_url quando um produto já existe
-    // no Supabase, mesmo que seu SKU/identity key tenha mudado.
+    // A identidade persistida é a fonte de verdade quando o mesmo original_url
+    // já existe. Isso permite atualizar preço/dados sem violar a unique constraint
+    // de affiliate_links.original_url.
     const existingProducts = await storage.getProducts();
     for (const existing of existingProducts) {
       try {
-        originalUrls.add(normalizeProductUrl(existing.original_url));
+        const originalUrl = normalizeProductUrl(existing.original_url);
+        originalUrls.add(originalUrl);
+        existingIdentityByUrl.set(originalUrl, existing.product_identity_key);
       } catch {
         // Ignore legacy/malformed rows.
       }
@@ -197,12 +201,13 @@ export class CrawlerService {
           const originalUrl = normalizeProductUrl(raw.url);
           const affiliateUrl = buildAffiliateUrl(originalUrl);
           if (!this.isLdmProductUrl(originalUrl) || !affiliateUrl.endsWith('/20889')) continue;
-          if (originalUrls.has(originalUrl)) continue;
 
-          const identity = generateProductIdentityKey(raw.sku, originalUrl, raw.name);
+          // Se já existe no banco, reutiliza a identidade existente para que o
+          // StorageService faça UPDATE em vez de INSERT.
+          const existingIdentity = existingIdentityByUrl.get(originalUrl);
+          const identity = existingIdentity || generateProductIdentityKey(raw.sku, originalUrl, raw.name);
           if (identities.has(identity)) continue;
           identities.add(identity);
-          originalUrls.add(originalUrl);
           products.push({ ...raw, url: originalUrl });
           added++;
         }
@@ -224,7 +229,8 @@ export class CrawlerService {
     for (const raw of products) {
       const originalUrl = normalizeProductUrl(raw.url);
       const affiliateUrl = buildAffiliateUrl(originalUrl);
-      const identity = generateProductIdentityKey(raw.sku, originalUrl, raw.name);
+      const existingIdentity = existingIdentityByUrl.get(originalUrl);
+      const identity = existingIdentity || generateProductIdentityKey(raw.sku, originalUrl, raw.name);
 
       const result = await storage.upsertProduct({
         product_identity_key: identity,
