@@ -70,6 +70,35 @@ O link de afiliado será inserido pelo publicador separadamente para gerar o pre
       return result;
     }
 
+    // Publication rules are enforced in code as a final safety layer.
+    let content = result.content
+      .replace(/https?:\\/\\/\\S+|www\\.\\S+/gi, '')
+      .replace(/R\\$\\s*\\d[\\d.]*(?:,\\d{1,2})?/gi, '')
+      .replace(/^[ \\t]*(?:preço|valor)\\s*:?[ \\t]*.*$/gim, '')
+      .replace(/[ \\t]{2,}/g, ' ')
+      .replace(/\\n{3,}/g, '\\n\\n')
+      .trim();
+
+    // @todos is mandatory and deterministic; never depend on the model for it.
+    if (!/@todos\\b/i.test(content)) {
+      content = `${content}\\n\\n@todos`;
+    }
+
+    const hasUrl = /https?:\\/\\/|www\\./i.test(content);
+    const hasMoney = /R\\$\\s*\\d|\\b\\d+[.,]\\d{2}\\s*(?:reais)?\\b/i.test(content);
+    if (hasUrl || hasMoney || !/@todos\\b/i.test(content)) {
+      logger.ai(`Copy rejeitada após sanitização para "${product.product_name}".`, 'error');
+      return {
+        ...result,
+        success: false,
+        content: '',
+        error: 'Copy rejeitada após sanitização: não pode conter preço/URL e deve conter @todos.'
+      };
+    }
+
+    return { ...result, content, success: true };
+    }
+
     const forbiddenPrice = /R\$|\bpreço\b|\bvalor\b|\bpor apenas\b|\bpor R\$/i.test(result.content);
     const forbiddenUrl = /https?:\/\/|www\./i.test(result.content);
     const missingTodos = !/@todos\b/i.test(result.content);
