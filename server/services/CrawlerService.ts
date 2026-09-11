@@ -2,7 +2,7 @@ import * as cheerio from 'cheerio';
 import { CrawlerRunResult } from '../types.js';
 import { storage } from './StorageService.js';
 import { logger } from './LoggerService.js';
-import { buildAffiliateUrl, normalizeProductUrl, generateProductIdentityKey } from '../utils/affiliate.js';
+import { buildAffiliateUrl, normalizeProductUrl, generateProductIdentityKey, extractLdmProductId } from '../utils/affiliate.js';
 
 const LDM_HOST = 'www.lojadomecanico.com.br';
 const LDM_ORIGIN = `https://${LDM_HOST}`;
@@ -169,17 +169,19 @@ export class CrawlerService {
     const identities = new Set<string>();
     const originalUrls = new Set<string>();
     const existingIdentityByUrl = new Map<string, string>();
+    const existingIdentityByProductId = new Map<string, string>();
     const visitedCategories = new Set<string>();
 
-    // A identidade persistida é a fonte de verdade quando o mesmo original_url
-    // já existe. Isso permite atualizar preço/dados sem violar a unique constraint
-    // de affiliate_links.original_url.
     const existingProducts = await storage.getProducts();
     for (const existing of existingProducts) {
       try {
         const originalUrl = normalizeProductUrl(existing.original_url);
+        const productId = extractLdmProductId(originalUrl);
         originalUrls.add(originalUrl);
         existingIdentityByUrl.set(originalUrl, existing.product_identity_key);
+        if (productId && !existingIdentityByProductId.has(productId)) {
+          existingIdentityByProductId.set(productId, `ldm:${productId}`);
+        }
       } catch {
         // Ignore legacy/malformed rows.
       }
@@ -202,17 +204,16 @@ export class CrawlerService {
           const affiliateUrl = buildAffiliateUrl(originalUrl);
           if (!this.isLdmProductUrl(originalUrl) || !affiliateUrl.endsWith('/20889')) continue;
 
-          // Se já existe no banco, reutiliza a identidade existente para que o
-          // StorageService faça UPDATE em vez de INSERT.
+          const productId = extractLdmProductId(originalUrl);
           const existingIdentity = existingIdentityByUrl.get(originalUrl);
-          const identity = existingIdentity || generateProductIdentityKey(raw.sku, originalUrl, raw.name);
+          const identity = existingIdentityByProductId.get(productId || '') || existingIdentity || generateProductIdentityKey(raw.sku, originalUrl, raw.name);
           if (identities.has(identity)) continue;
           identities.add(identity);
           products.push({ ...raw, url: originalUrl });
           added++;
         }
 
-        logger.crawler(`Categoria ${categoryUrl}: ${categoryProducts.length} cards válidos; ${added} novos; total ${products.length}/${TARGET_PRODUCTS}.`);
+        logger.crawler(`Categoria ${categoryUrl}: ${categoryProducts.length} cards válidos; ${added} aceitos; total ${products.length}/${TARGET_PRODUCTS}.`);
       } catch (error: any) {
         logger.crawler(`Aviso ao acessar categoria ${categoryUrl}: ${error?.message || String(error)}`, 'warn');
       }
@@ -229,8 +230,9 @@ export class CrawlerService {
     for (const raw of products) {
       const originalUrl = normalizeProductUrl(raw.url);
       const affiliateUrl = buildAffiliateUrl(originalUrl);
+      const productId = extractLdmProductId(originalUrl);
       const existingIdentity = existingIdentityByUrl.get(originalUrl);
-      const identity = existingIdentity || generateProductIdentityKey(raw.sku, originalUrl, raw.name);
+      const identity = existingIdentityByProductId.get(productId || '') || existingIdentity || generateProductIdentityKey(raw.sku, originalUrl, raw.name);
 
       const result = await storage.upsertProduct({
         product_identity_key: identity,
