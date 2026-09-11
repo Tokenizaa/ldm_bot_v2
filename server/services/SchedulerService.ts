@@ -102,7 +102,7 @@ export class SchedulerService {
         const retryDue = !p.next_attempt_at || new Date(p.next_attempt_at).getTime() <= now;
         return retryDue && new Date(p.scheduled_at).getTime() > now;
       });
-      for (const pub of due) {
+      for (const pub of due.filter(p => !p.next_attempt_at || new Date(p.next_attempt_at).getTime() <= now)) {
         try { await this.schedulePublication(pub.id); }
         catch (error) { logger.scheduler(`Erro ao processar ${pub.id}: ${error instanceof Error ? error.message : String(error)}`, 'error'); }
       }
