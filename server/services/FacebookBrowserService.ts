@@ -3,7 +3,7 @@ import path from 'path';
 import { chromium, BrowserContext, Page } from 'playwright';
 import { logger } from './LoggerService.js';
 
-/** Single owner of the persistent Facebook browser. It never logs in or resets the profile. */
+/** Single owner of the persistent Facebook browser: one context and one operational page. */
 export class FacebookBrowserService {
   private readonly profileDir = path.join(process.cwd(), 'data', 'browser-profiles', 'facebook');
   private context: BrowserContext | null = null;
@@ -42,8 +42,17 @@ export class FacebookBrowserService {
 
   async page(): Promise<Page> {
     const context = await this.start();
-    const existing = context.pages().find(page => !page.isClosed());
-    return existing || await context.newPage();
+    const pages = context.pages().filter(page => !page.isClosed());
+    const page = pages[0] || await context.newPage();
+
+    // Facebook automation is intentionally single-page. Close accidental extra tabs/windows
+    // instead of allowing selectors to resolve against the wrong page.
+    for (const extra of pages.slice(1)) {
+      await extra.close().catch(() => undefined);
+    }
+
+    await page.bringToFront().catch(() => undefined);
+    return page;
   }
 
   async cookies() {
