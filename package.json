@@ -8,11 +8,12 @@
     "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
     "start": "node dist/server.cjs",
     "clean": "rm -rf dist server.js",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "scrape:150": "tsx scripts/scrape-150.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.116.0",
-    "@tailwindcss/vite": "^4.1.14",
+    "@tailwindcss/vite": "^5.0.0",
     "@vitejs/plugin-react": "^5.0.4",
     "cheerio": "^1.2.0",
     "dotenv": "^17.2.3",
@@ -27,11 +28,9 @@
   "devDependencies": {
     "@types/node": "^22.14.0",
     "autoprefixer": "^10.4.21",
-    "esbuild": "^0.25.0",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",
-    "vite": "^6.2.3",
     "@types/express": "^4.17.21"
   }
 }
