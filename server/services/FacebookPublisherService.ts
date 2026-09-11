@@ -15,45 +15,101 @@ export class FacebookPublisherService {
   constructor(private readonly facebook: FacebookService) {}
 
   private async openComposer(page: Page): Promise<boolean> {
-    const trigger = page.locator(
-      '[role="button"]:has-text("Escreva algo"), [role="button"]:has-text("No que você está pensando"), [aria-label*="Criar uma publicação"], [aria-label*="Escreva algo"]'
-    ).first();
-    if (!(await trigger.count())) return false;
-    await trigger.click({ timeout: 10000 });
-    await page.locator('[role="dialog"]').waitFor({ state: 'visible', timeout: 10000 }).catch(() => undefined);
-    return await page.locator(
-      '[role="dialog"] [role="textbox"], [role="dialog"] [contenteditable="true"], [role="textbox"][contenteditable="true"]'
-    ).count() > 0;
+    const triggers = [
+      page.getByRole('button', { name: /Escreva algo|No que você está pensando|Criar uma publicação/i }).first(),
+      page.locator('[role="button"][aria-label*="Criar uma publicação" i]').first(),
+      page.locator('[role="button"][aria-label*="Escreva algo" i]').first(),
+      page.locator('div[role="button"]:has-text("Escreva algo")').first(),
+      page.locator('div[role="button"]:has-text("No que você está pensando")').first()
+    ];
+
+    for (const trigger of triggers) {
+      if (!(await trigger.count().catch(() => 0))) continue;
+      if (!(await trigger.isVisible().catch(() => false))) continue;
+      await trigger.scrollIntoViewIfNeeded().catch(() => undefined);
+      await trigger.click({ timeout: 10000 });
+      await page.waitForTimeout(1000);
+      if (await this.getComposerTextbox(page).count()) return true;
+    }
+
+    return false;
+  }
+
+  private getComposerTextbox(page: Page) {
+    return page.locator(
+      '[role="dialog"] [contenteditable="true"][role="textbox"], ' +
+      '[role="dialog"] [contenteditable="true"], ' +
+      '[role="dialog"] textarea, ' +
+      '[role="dialog"] input[role="textbox"]'
+    ).filter({ visible: true }).first();
   }
 
   private async fillComposer(page: Page, content: string): Promise<boolean> {
-    const textbox = page.locator(
-      '[role="dialog"] [role="textbox"], [role="dialog"] [contenteditable="true"], [role="textbox"][contenteditable="true"]'
-    ).first();
-    if (!(await textbox.count())) return false;
-    await textbox.fill(content);
-    return true;
+    const textbox = this.getComposerTextbox(page);
+    if (!(await textbox.count().catch(() => 0))) return false;
+
+    await textbox.scrollIntoViewIfNeeded().catch(() => undefined);
+    await textbox.click({ timeout: 10000 });
+
+    // Facebook's composer is usually a contenteditable React surface.
+    // keyboard.insertText generates the input events that its editor observes;
+    // locator.fill() can change the DOM without updating Facebook's internal state.
+    await page.keyboard.press('Control+A').catch(() => undefined);
+    await page.keyboard.insertText(content);
+    await page.waitForTimeout(1200);
+
+    const value = await textbox.textContent().catch(() => '');
+    const aria = await textbox.getAttribute('aria-label').catch(() => '');
+    return !!(value?.includes(content.slice(0, 24)) || aria?.includes(content.slice(0, 24)));
   }
 
   private async publish(page: Page): Promise<{ success: boolean; postUrl?: string; error?: string }> {
-    const dialog = page.locator('[role="dialog"]').last();
-    const button = dialog.getByRole('button', { name: /^(Publicar|Postar)$/i }).last();
-    if (!(await button.count())) return { success: false, error: 'Botão Publicar/Postar não encontrado.' };
-    if (await button.isDisabled().catch(() => false) || (await button.getAttribute('aria-disabled')) === 'true') {
-      return { success: false, error: 'Botão Publicar/Postar está desabilitado.' };
+    const dialogs = page.locator('[role="dialog"]');
+    const dialog = dialogs.last();
+
+    const candidates = [
+      dialog.getByRole('button', { name: /^Publicar$/i }).last(),
+      dialog.getByRole('button', { name: /^Postar$/i }).last(),
+      dialog.locator('[role="button"]').filter({ hasText: /^Publicar$/i }).last(),
+      dialog.locator('[role="button"]').filter({ hasText: /^Postar$/i }).last(),
+      dialog.locator('button').filter({ hasText: /Publicar|Postar/i }).last(),
+      page.locator('[role="dialog"] [aria-label*="Publicar" i], [role="dialog"] [aria-label*="Postar" i]').last()
+    ];
+
+    let button: ReturnType<Page['locator']> | null = null;
+    for (const candidate of candidates) {
+      if (await candidate.count().catch(() => 0) && await candidate.isVisible().catch(() => false)) {
+        button = candidate;
+        break;
+      }
     }
 
-    await button.click({ timeout: 10000 });
-    await page.waitForTimeout(3000);
+    if (!button) {
+      // Do not close the browser: the visible page is the diagnostic state.
+      return { success: false, error: 'Botão Publicar/Postar não encontrado no composer visível.' };
+    }
 
-    const successText = page.getByText(/publicado|postado|publicação foi criada|seu post foi/i).first();
-    const dialogStillOpen = await page.locator('[role="dialog"]').last().isVisible().catch(() => false);
+    const disabled =
+      await button.isDisabled().catch(() => false) ||
+      (await button.getAttribute('aria-disabled').catch(() => null)) === 'true';
+
+    if (disabled) {
+      return { success: false, error: 'Botão Publicar/Postar está desabilitado após preencher o conteúdo.' };
+    }
+
+    await button.scrollIntoViewIfNeeded().catch(() => undefined);
+    await button.click({ timeout: 10000 });
+    await page.waitForTimeout(4000);
+
     const postLink = page.locator('a[href*="/posts/"], a[href*="/permalink/"]').first();
     const href = await postLink.getAttribute('href').catch(() => null);
-
     if (href) return { success: true, postUrl: href };
+
+    const successText = page.getByText(/publicado|postado|publicação foi criada|seu post foi/i).first();
     if (await successText.isVisible().catch(() => false)) return { success: true };
-    if (!dialogStillOpen) return { success: true };
+
+    const stillOpen = await page.locator('[role="dialog"]').last().isVisible().catch(() => false);
+    if (!stillOpen) return { success: true };
 
     return { success: false, error: 'Facebook não confirmou o envio da publicação.' };
   }
