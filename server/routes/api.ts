@@ -125,7 +125,8 @@ apiRouter.post('/publications', async (req, res) => {
     const { product_id, scheduled_at, content, facebook_group_url } = req.body;
     if (!product_id || !scheduled_at || !content) return res.status(400).json({ success: false, error: 'product_id, scheduled_at e content são obrigatórios.' });
     const product = await storage.getProductById(product_id);
-    if (!product || !product.affiliate_url.endsWith('/20889') || !content.includes(product.affiliate_url)) return res.status(400).json({ success: false, error: 'Publicação inválida: produto ou link afiliado real não corresponde.' });
+    if (!product || !product.affiliate_url.endsWith('/20889')) return res.status(400).json({ success: false, error: 'Publicação inválida: produto ou link afiliado real não corresponde.' });
+    if (!content.trim() || /https?:\/\//i.test(content) || /R\$/i.test(content)) return res.status(400).json({ success: false, error: 'Publicação inválida: a copy deve ser evergreen e não pode conter URL ou preço.' });
     const publication = await storage.createPublication({ product_id, scheduled_at, status: 'scheduled', content, facebook_group_url });
     res.json({ success: true, publication });
   } catch (err: any) { res.status(500).json({ success: false, error: err.message }); }
