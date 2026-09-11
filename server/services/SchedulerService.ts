@@ -1,6 +1,7 @@
 import { Publication, OperationalQuota } from '../types.js';
 import { storage } from './StorageService.js';
 import { facebookAutomation } from './FacebookAutomationService.js';
+import { facebookSession } from './FacebookSessionService.js';
 import { logger } from './LoggerService.js';
 
 const TIME_ZONE = 'America/Sao_Paulo';
@@ -15,6 +16,26 @@ function normalizeScheduledAt(value: string): string { const parsed = new Date(v
 function idempotencyKey(productId: string, groupUrl: string, scheduledAt: string): string { return `${productId}:${normalizeGroupUrl(groupUrl)}:${normalizeScheduledAt(scheduledAt)}`; }
 
 export class SchedulerService {
+  /** Single application startup entrypoint for Facebook + scheduling. The HTTP server does not know Facebook details. */
+  async start(): Promise<void> {
+    try {
+      const status = await facebookSession.start();
+      logger.scheduler(`FACEBOOK_STARTUP status=${status.status}`);
+      if (!status.connected) {
+        logger.scheduler('STARTUP_MONTHLY_SCHEDULE skipped: Facebook session not authenticated.', 'warn');
+        return;
+      }
+
+      const result = await this.ensureMonthlySchedule();
+      logger.scheduler(
+        `STARTUP_MONTHLY_SCHEDULE confirmed=${result.scheduled.filter(p => p.status === 'scheduled').length} message=${result.message}`,
+        'success'
+      );
+    } catch (error: any) {
+      logger.scheduler('STARTUP_MONTHLY_SCHEDULE failed: ' + error.message, 'error');
+    }
+  }
+
   async ensureMonthlySchedule(targetDateStr?: string): Promise<{ scheduled: Publication[]; quota: OperationalQuota; message: string }> {
     const settings = await storage.getSettings();
     const now = new Date();
