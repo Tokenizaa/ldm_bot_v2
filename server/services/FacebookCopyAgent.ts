@@ -16,7 +16,7 @@ export interface FacebookCopyResult {
  */
 export class FacebookCopyAgent {
   async generate(product: Product, customModel?: string): Promise<FacebookCopyResult> {
-    const model = customModel || process.env.NVIDIA_MODEL || 'unknown';
+    const model = customModel || process.env.NVIDIA_MODEL || undefined;
 
     if (!nvidiaAI.isConfigured()) {
       return {
