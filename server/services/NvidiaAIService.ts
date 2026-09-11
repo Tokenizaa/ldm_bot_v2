@@ -11,14 +11,18 @@ export interface NvidiaGenerationResult {
 
 export class NvidiaAIService {
   private readonly apiUrl = 'https://integrate.api.nvidia.com/v1/chat/completions';
-  private readonly defaultModel = process.env.NVIDIA_MODEL || 'meta/llama-3.3-70b-instruct';
-  private readonly activeFallbackModel = 'meta/llama-3.1-8b-instruct';
+  private readonly defaultModel = process.env.NVIDIA_MODEL || 'nvidia/nemotron-3.5-lightning-30b-a3b';
+  private readonly fallbackModels = [
+    'nvidia/nemotron-3-super-120b-a12b',
+    'nvidia/nemotron-3-nano-30b-a3b',
+    'nvidia/nvidia-nemotron-nano-9b-v2'
+  ];
 
   isConfigured(): boolean {
     return Boolean(process.env.NVIDIA_API_KEY?.trim());
   }
 
-  async generateRawCopy(systemPrompt: string, userPrompt: string, customModel?: string): Promise<NvidiaGenerationResult> {
+  async generateRawCopy(systemPrompt: string, userPrompt: string, customModel?: string, attemptedModels: string[] = []): Promise<NvidiaGenerationResult> {
     const apiKey = process.env.NVIDIA_API_KEY?.trim();
     const model = customModel && customModel !== 'unknown'
       ? customModel
@@ -47,9 +51,14 @@ export class NvidiaAIService {
       });
 
       if (!response.ok) {
-        if (response.status === 404 && model !== this.activeFallbackModel) {
-          logger.ai(`Modelo NVIDIA ${model} não disponível (HTTP 404). Usando ${this.activeFallbackModel}.`, 'warn');
-          return this.generateRawCopy(systemPrompt, userPrompt, this.activeFallbackModel);
+        const retryable = [400, 404, 408, 409, 410, 429, 500, 502, 503, 504].includes(response.status);
+        const candidates = [this.defaultModel, ...this.fallbackModels]
+          .filter(candidate => !attemptedModels.includes(candidate) && candidate !== model);
+
+        if (retryable && candidates.length > 0) {
+          const nextModel = candidates[0];
+          logger.ai(`Modelo NVIDIA ${model} falhou (HTTP ${response.status}). Tentando Nemotron fallback ${nextModel}.`, 'warn');
+          return this.generateRawCopy(systemPrompt, userPrompt, nextModel, [...attemptedModels, model]);
         }
 
         throw new Error(`NVIDIA API HTTP ${response.status}: ${(await response.text()).slice(0, 300)}`);
@@ -59,7 +68,17 @@ export class NvidiaAIService {
       const content = String(data.choices?.[0]?.message?.content || '').trim();
 
       if (!content) {
-        throw new Error('NVIDIA API retornou uma resposta sem conteúdo.');
+        const retryCandidates = [this.defaultModel, ...this.fallbackModels]
+        .filter(candidate => !attemptedModels.includes(candidate) && candidate !== model);
+
+      if (retryCandidates.length > 0) {
+        const nextModel = retryCandidates[0];
+        logger.ai(`Modelo NVIDIA ${model} retornou conteúdo vazio. Tentando Nemotron fallback ${nextModel}.`, 'warn');
+        return this.generateRawCopy(systemPrompt, userPrompt, nextModel, [...attemptedModels, model]);
+      }
+
+      throw new Error('NVIDIA API retornou uma resposta sem conteúdo após todos os modelos Nemotron.');
+    
       }
 
       logger.ai(`Copy gerada pelo agente para "${userPrompt.split('\n')[0]}"`);
