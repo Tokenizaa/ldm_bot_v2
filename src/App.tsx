@@ -497,7 +497,6 @@ export default function App() {
               onScheduleAll={handleScheduleAll}
               onPublishNow={handlePublishNow}
               isSchedulingAll={isSchedulingAll}
-              isGeneratingBatch={isGeneratingBatch}
             />
           )}
 
