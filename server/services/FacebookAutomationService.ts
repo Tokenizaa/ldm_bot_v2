@@ -1,7 +1,6 @@
 import type { Page, Locator } from 'playwright';
 import { storage } from './StorageService.js';
 import { logger } from './LoggerService.js';
-import { contentService } from './ContentService.js';
 import { facebookBrowser } from './FacebookBrowserService.js';
 import { facebookSession } from './FacebookSessionService.js';
 
