@@ -46,8 +46,11 @@ export class SchedulerService {
       if (!Number.isInteger(hour) || !Number.isInteger(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) { logger.scheduler(`Horário inválido ignorado: ${time}`, 'error'); continue; }
       const localDate = new Date(targetDate); localDate.setHours(hour, minute, 0, 0);
       if (localDate.getTime() <= Date.now()) continue;
-      const content = product.facebook_copy?.trim() || (await contentService.generateCopyForProduct(product, settings.nvidia_model)).content.trim();
-      if (!content || /https?:\/\//i.test(content) || /R\$/i.test(content)) { logger.scheduler(`Conteúdo rejeitado para ${product.product_name}: copy canônica inválida.`, 'error'); continue; }
+      const content = product.facebook_copy?.trim();
+      if (!content || /https?:\/\//i.test(content) || /R\$/i.test(content)) {
+        logger.scheduler(`Conteúdo rejeitado para ${product.product_name}: copy canônica ausente ou inválida. Execute o backfill antes do agendamento.`, 'error');
+        continue;
+      }
       const publication = await storage.createPublication({ product_id: product.id, scheduled_at: localDate.toISOString(), status: 'scheduled', content, facebook_group_url: settings.facebook_group_url });
       const result = await facebookService.publishScheduledPublication({ groupUrl: settings.facebook_group_url, content, affiliateUrl: product.affiliate_url, scheduledDate: datePrefix, scheduledTime: time });
       if (result.success) { scheduled.push(publication); logger.scheduler(`Publicação ${publication.id} agendada no Facebook para ${result.scheduledAt || localDate.toISOString()}.`); }
