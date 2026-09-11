@@ -1,12 +1,9 @@
 import express from 'express';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
 import 'dotenv/config';
 import { logger } from './server/services/LoggerService.js';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+import { storage } from './server/services/StorageService.js';
 
 async function startServer() {
   const { apiRouter } = await import('./server/routes/api.js');
@@ -49,15 +46,15 @@ async function startServer() {
           return;
         }
 
-        const settings = await (await import('./server/services/StorageService.js')).storage.getSettings();
+        const settings = await storage.getSettings();
         const groupCheck = await facebookAutomation.verifyGroup(settings.facebook_group_url);
         if (!groupCheck.accessible) {
           logger.scheduler(`STARTUP_MONTHLY_SCHEDULE skipped: grupo Facebook não validado: ${groupCheck.message}`, 'error');
           return;
         }
 
-        // One persistent browser/context/page is reused. The preflight deliberately
-        // leaves the browser on the real group page before the scheduler starts.
+        // The same persistent browser/context/page is kept throughout the process.
+        // The preflight intentionally leaves the browser on the real group page.
         const result = await scheduler.ensureMonthlySchedule();
         logger.scheduler(`STARTUP_MONTHLY_SCHEDULE confirmed=${result.scheduled.length} message=${result.message}`, 'success');
       } catch (error: any) {
