@@ -11,11 +11,8 @@ export interface FacebookCopyResult {
 }
 
 /**
- * Canonical copy agent for Facebook product posts.
- *
- * The agent does NOT publish and does NOT add the affiliate URL.
- * The publisher handles the URL separately so Facebook can build the
- * Open Graph preview and then remove the raw URL from the final text.
+ * Canonical Facebook copy agent.
+ * Generates only the human-facing copy; the publisher owns the affiliate URL.
  */
 export class FacebookCopyAgent {
   async generate(product: Product, customModel?: string): Promise<FacebookCopyResult> {
@@ -32,41 +29,32 @@ export class FacebookCopyAgent {
     const systemPrompt = `
 Você é o agente oficial de copy e SEO do ForgeDeals para publicações de produtos em grupos do Facebook no Brasil.
 
-OBJETIVO:
-Criar uma copy comercial interessante, natural e otimizada para descoberta/SEO interno do Facebook, sem parecer spam.
-
 FONTE DE VERDADE:
-Use EXCLUSIVAMENTE os dados estruturados do produto fornecidos pelo sistema.
-Você pode reorganizar, combinar e destacar palavras-chave que já estejam nos dados.
-NUNCA invente características, especificações, descontos, benefícios, avaliações, estoque, frete, garantia ou qualquer outra informação não fornecida.
+Use exclusivamente os dados estruturados fornecidos. Não invente características, especificações, descontos, benefícios, avaliações, estoque, frete, garantia ou qualquer outra informação.
 
 REGRAS OBRIGATÓRIAS:
-1. NUNCA escreva preço ou moeda.
-2. NUNCA escreva URL, link ou chamada contendo URL.
-3. NUNCA escreva código promocional inexistente.
-4. Não use "preço", "R$" ou equivalentes.
-5. Use o nome real do produto como núcleo semântico.
-6. Aproveite marca, categoria e SKU quando forem úteis.
-7. Gere texto com intenção comercial clara e palavras-chave naturais.
-8. O texto deve despertar interesse e incentivar a pessoa a conferir a oferta.
-9. Evite títulos genéricos como apenas "OFERTA".
-10. Não use afirmações absolutas que não estejam nos dados.
-11. Inclua @todos em uma linha própria no final da copy.
-12. Inclua no máximo 4 hashtags relevantes, derivadas do produto/categoria.
-13. Entregue SOMENTE o texto final pronto para o Facebook.
-14. Não explique as regras nem mencione IA.
+1. Nunca escreva preço, valor, moeda ou qualquer expressão equivalente.
+2. Nunca escreva URL ou link.
+3. Use o nome real do produto como núcleo semântico.
+4. Aproveite marca, categoria e SKU quando forem úteis.
+5. Crie uma copy comercial natural, interessante e otimizada para descoberta/SEO interno do Facebook.
+6. Não reduza a publicação a um simples título.
+7. Inclua uma CTA natural para conferir a oferta, sem URL.
+8. Inclua @todos em uma linha própria no final.
+9. Inclua no máximo 4 hashtags relevantes, derivadas dos dados do produto.
+10. Não faça afirmações que não possam ser sustentadas pelos dados fornecidos.
+11. Entregue somente o texto final pronto para publicação.
 
-ESTRUTURA PREFERENCIAL:
-- Gancho curto e relevante.
-- Nome do produto / principal intenção de busca.
+ESTRUTURA:
+- Gancho curto.
+- Nome do produto e termos relevantes de busca.
 - Contexto comercial baseado nos dados reais.
-- Código somente se ajudar na identificação.
-- CTA para conferir a oferta, sem URL.
+- Código/SKU se ajudar na identificação.
+- CTA sem URL.
 - @todos.
 - Hashtags.
 
-IMPORTANTE:
-O link de afiliado será inserido separadamente pelo publicador para gerar o preview Open Graph. Ele NÃO faz parte da copy gerada.
+O link de afiliado será inserido pelo publicador separadamente para gerar o preview Open Graph e não faz parte da copy.
 `.trim();
 
     const userPrompt = [
@@ -82,16 +70,21 @@ O link de afiliado será inserido separadamente pelo publicador para gerar o pre
       return result;
     }
 
-    const forbiddenPrice = /R\\$|\\bpreço\\b|\\bpor apenas\\b|\\bpor R\\$/i.test(result.content);
-    if (forbiddenPrice || /https?:\\/\\//i.test(result.content)) {
+    const forbiddenPrice = /R\$|\bpreço\b|\bvalor\b|\bpor apenas\b|\bpor R\$/i.test(result.content);
+    const forbiddenUrl = /https?:\/\/|www\./i.test(result.content);
+    const missingTodos = !/@todos\b/i.test(result.content);
+
+    if (forbiddenPrice || forbiddenUrl || missingTodos) {
       return {
         ...result,
         success: false,
         content: '',
-        error: 'Copy rejeitada: contém preço ou URL, que são proibidos na descrição.'
+        error: 'Copy rejeitada: contém preço/URL ou não contém @todos.'
       };
     }
 
     return result;
   }
 }
+
+export const facebookCopyAgent = new FacebookCopyAgent();
