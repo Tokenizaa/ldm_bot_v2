@@ -286,16 +286,35 @@ export class FacebookService {
   }
 
   private async openComposer(page: Page): Promise<boolean> {
-    const trigger = page.locator(
-      '[role="button"]:has-text("Escreva algo"), [role="button"]:has-text("No que você está pensando"), [aria-label*="Criar uma publicação"], [aria-label*="Escreva algo"]'
-    ).first();
-    if (!(await trigger.count())) return false;
-
-    await trigger.click({ timeout: 10000 });
-    await page.locator('[role="dialog"]').waitFor({ state: 'visible', timeout: 10000 }).catch(() => undefined);
-    return await page.locator(
-      '[role="dialog"] [role="textbox"], [role="dialog"] [contenteditable="true"], [role="textbox"][contenteditable="true"]'
-    ).count() > 0;
+    const triggers = [
+      page.getByRole('button', { name: /Escreva algo|No que você está pensando|Criar uma publicação/i }).first(),
+      page.locator('[role="button"][aria-label*="Criar uma publicação" i]').first(),
+      page.locator('[role="button"][aria-label*="Escreva algo" i]').first(),
+      page.locator('[role="button"]').filter({ hasText: /Escreva algo|No que você está pensando|Criar uma publicação/i }).first(),
+      page.locator('div[role="button"]').filter({ hasText: /Escreva algo|No que você está pensando|Criar uma publicação/i }).first(),
+      page.getByText(/Escreva algo|No que você está pensando|Criar uma publicação/i, { exact: false }).first()
+    ];
+    for (const trigger of triggers) {
+      if (!(await trigger.count().catch(() => 0))) continue;
+      if (!(await trigger.isVisible().catch(() => false))) continue;
+      await trigger.scrollIntoViewIfNeeded().catch(() => undefined);
+      try {
+        await trigger.click({ timeout: 10000 });
+      } catch {
+        const box = await trigger.boundingBox().catch(() => null);
+        if (!box) continue;
+        await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+      }
+      await page.waitForTimeout(1200);
+      const textbox = page.locator(
+        '[role="dialog"] [contenteditable="true"][role="textbox"], ' +
+        '[role="dialog"] [contenteditable="true"], ' +
+        '[role="dialog"] textarea, ' +
+        '[role="dialog"] input[role="textbox"]'
+      ).first();
+      if (await textbox.count().catch(() => 0) && await textbox.isVisible().catch(() => false)) return true;
+    }
+    return false;
   }
 
   private async fillCopyAndBuildLinkPreview(page: Page, copy: string, affiliateUrl: string): Promise<boolean> {
@@ -306,7 +325,7 @@ export class FacebookService {
 
     await textbox.click({ timeout: 10000 });
     await page.keyboard.press('Control+A').catch(() => undefined);
-    await page.keyboard.insertText(copy.trim() + '\\n' + affiliateUrl);
+    await page.keyboard.insertText(copy.trim() + '\n' + affiliateUrl);
     await page.waitForTimeout(4500);
 
     const textBefore = await textbox.textContent().catch(() => '');
