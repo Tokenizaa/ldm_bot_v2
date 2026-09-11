@@ -9,7 +9,8 @@
     "start": "node dist/server.cjs",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
-    "scrape:150": "tsx scripts/scrape-150.ts"
+    "scrape:150": "tsx scripts/scrape-150.ts",
+    "backfill:copy": "tsx scripts/backfill-facebook-copy.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.116.0",
