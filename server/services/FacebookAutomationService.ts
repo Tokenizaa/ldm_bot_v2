@@ -18,22 +18,14 @@ class FacebookAutomationService {
     try { return await operation(); } finally { release(); }
   }
 
-  private log(step: string, message: string, level: 'info' | 'warn' | 'error' | 'success' = 'info') {
-    logger.facebook(`STEP=${step} ${message}`, level);
-  }
+  private log(step: string, message: string, level: 'info' | 'warn' | 'error' | 'success' = 'info') { logger.facebook(`STEP=${step} ${message}`, level); }
 
-  private composer(page: Page): Locator {
-    return page.locator("[aria-label='Escreva algo...']").first();
-  }
-
-  private editor(page: Page): Locator {
-    return page.locator("div[role='dialog'][aria-label='Criar post'] [role='textbox']").last();
-  }
+  private composer(page: Page): Locator { return page.locator("[aria-label='Escreva algo...']").first(); }
+  private editor(page: Page): Locator { return page.locator("div[role='dialog'][aria-label='Criar post'] [role='textbox']").last(); }
 
   private isGroupPage(page: Page, groupUrl: string): boolean {
     try {
-      const expected = new URL(groupUrl);
-      const actual = new URL(page.url());
+      const expected = new URL(groupUrl), actual = new URL(page.url());
       return actual.origin === expected.origin && actual.pathname.replace(/\/+$/, '') === expected.pathname.replace(/\/+$/, '');
     } catch { return false; }
   }
@@ -44,15 +36,31 @@ class FacebookAutomationService {
       return;
     }
     this.log('GROUP_NAVIGATION', 'url=' + groupUrl);
-    await page.goto(groupUrl, { waitUntil: 'commit', timeout: 60000 });
-    await page.waitForTimeout(1500);
+    await page.goto(groupUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await page.waitForTimeout(2500);
     this.log('GROUP_READY', 'url=' + page.url());
   }
 
-  private async openComposer(page: Page) {
-    const trigger = this.composer(page);
+  private async waitForComposer(page: Page): Promise<Locator> {
+    const composer = this.composer(page);
     this.log('COMPOSER_WAIT', "selector=[aria-label='Escreva algo...']");
-    await trigger.waitFor({ state: 'visible', timeout: 15000 });
+    try {
+      await composer.waitFor({ state: 'visible', timeout: 30000 });
+      return composer;
+    } catch {
+      const diagnostic = {
+        url: page.url(),
+        title: await page.title().catch(() => ''),
+        composerCount: await composer.count().catch(() => -1),
+        bodyChars: await page.locator('body').innerText().then(t => t.length).catch(() => -1)
+      };
+      this.log('COMPOSER_DIAGNOSTIC', JSON.stringify(diagnostic), 'warn');
+      throw new Error('FACEBOOK_COMPOSER_NOT_AVAILABLE');
+    }
+  }
+
+  private async openComposer(page: Page) {
+    const trigger = await this.waitForComposer(page);
     await trigger.click({ timeout: 15000 });
     const editor = this.editor(page);
     await editor.waitFor({ state: 'visible', timeout: 15000 });
@@ -112,9 +120,8 @@ class FacebookAutomationService {
     if (await button.isDisabled().catch(() => false) || await button.getAttribute('aria-disabled') === 'true') throw new Error('FACEBOOK_SCHEDULE_CONFIRM_DISABLED');
     await button.click({ timeout: 15000 });
     await page.waitForTimeout(2500);
-
     const scheduledUrl = groupUrl.replace(/\/+$/, '') + '/scheduled_posts';
-    await page.goto(scheduledUrl, { waitUntil: 'commit', timeout: 60000 });
+    await page.goto(scheduledUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
     await page.waitForTimeout(1800);
     const body = await page.locator('body').innerText().catch(() => '');
     const needle = content.replace(/\s+/g, ' ').trim().slice(0, 80);
@@ -134,7 +141,6 @@ class FacebookAutomationService {
         if (!input.content?.trim() || /https?:\/\//i.test(input.content) || /R\$/i.test(input.content)) throw new Error('FACEBOOK_CONTENT_INVALID');
         const target = new Date(input.scheduledDate + 'T' + input.scheduledTime + ':00-03:00');
         if (Number.isNaN(target.getTime()) || target.getTime() <= Date.now()) throw new Error('FACEBOOK_SCHEDULE_IN_PAST');
-
         await facebookSession.requireAuthenticated();
         const page = await facebookBrowser.page();
         await this.goToGroup(page, input.groupUrl);
@@ -163,12 +169,9 @@ class FacebookAutomationService {
         await facebookSession.requireAuthenticated();
         const page = await facebookBrowser.page();
         await this.goToGroup(page, groupUrl);
-        const expected = new URL(groupUrl);
-        const actual = new URL(page.url());
-        const expectedPath = expected.pathname.replace(/\/+$/, '');
-        const actualPath = actual.pathname.replace(/\/+$/, '');
+        const expected = new URL(groupUrl), actual = new URL(page.url());
         const title = await page.title().catch(() => '');
-        const accessible = actual.origin === expected.origin && actualPath === expectedPath && /A Loja Do Mecânico/i.test(title);
+        const accessible = actual.origin === expected.origin && actual.pathname.replace(/\/+$/, '') === expected.pathname.replace(/\/+$/, '') && /A Loja Do Mecânico/i.test(title);
         this.log('GROUP_VERIFY', 'accessible=' + accessible + ' url=' + page.url() + ' title=' + title);
         return { accessible, message: accessible ? 'Grupo acessível.' : `Grupo não validado. url=${page.url()} title=${title}` };
       } catch (error: any) {
