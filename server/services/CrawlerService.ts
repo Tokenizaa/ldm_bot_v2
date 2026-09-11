@@ -2,6 +2,7 @@ import * as cheerio from 'cheerio';
 import { CrawlerRunResult } from '../types.js';
 import { storage } from './StorageService.js';
 import { logger } from './LoggerService.js';
+import { contentService } from './ContentService.js';
 import { buildAffiliateUrl, normalizeProductUrl, generateProductIdentityKey, extractLdmProductId } from '../utils/affiliate.js';
 
 const LDM_HOST = 'www.lojadomecanico.com.br';
@@ -247,6 +248,11 @@ export class CrawlerService {
         last_scraped_at: new Date().toISOString(),
       });
 
+      if (result.copyNeedsRegeneration) {
+        const copyResult = await contentService.generateCopyForProduct(result.product);
+        await storage.updateProductCopy(result.product.id, copyResult.content);
+        logger.crawler(`Copy Facebook preparada para: ${result.product.product_name}`);
+      }
       valid++;
       if (result.isNew) created++;
       else updated++;
