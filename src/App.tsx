@@ -200,7 +200,7 @@ export default function App() {
     setIsGeneratingBatch(true);
     showToast('Gerando lote diário de 5 publicações com NVIDIA AI...', 'info');
     try {
-      const res = await apiRequest('/api/scheduler/generate-batch', { method: 'POST' });
+      const res = await apiRequest('/api/scheduler/batch-today', { method: 'POST' });
       showToast(`Lote gerado com sucesso! ${res.generated} novas publicações agendadas para hoje.`, 'success');
       await fetchAllData();
     } catch (err: any) {
@@ -214,7 +214,7 @@ export default function App() {
     setIsSchedulingAll(true);
     showToast('Montando e programando automaticamente a fila de publicações...', 'info');
     try {
-      const res = await apiRequest('/api/scheduler/generate-batch', { method: 'POST' });
+      const res = await apiRequest('/api/scheduler/batch-today', { method: 'POST' });
       showToast(`${res.generated || 0} publicações preparadas para o agendamento automático.`, 'success');
       setActiveTab('schedule');
       await fetchAllData();
