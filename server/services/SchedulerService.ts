@@ -8,10 +8,12 @@ const TIME_ZONE = 'America/Sao_Paulo';
 const DEFAULT_HOURS = ['08:00', '11:00', '14:00', '17:00', '20:00'];
 const CONFIRMED = ['scheduled', 'published'] as const;
 const STRUCTURAL_FACEBOOK_ERRORS = new Set([
+  'FACEBOOK_GROUP_NOT_READY',
   'FACEBOOK_COMPOSER_NOT_AVAILABLE',
   'FACEBOOK_COMPOSER_DIALOG_NOT_FOUND',
   'FACEBOOK_CONTENT_FIELD_NOT_FOUND',
   'FACEBOOK_SCHEDULE_BUTTON_NOT_FOUND',
+  'FACEBOOK_LINK_PREVIEW_INPUT_FAILED',
   'FACEBOOK_DATE_CELL_NOT_FOUND',
   'FACEBOOK_TIME_OPTION_NOT_FOUND',
   'FACEBOOK_SCHEDULE_CONFIRM_DISABLED',
@@ -119,10 +121,16 @@ export class SchedulerService {
     const settings = await storage.getSettings();
     const date = new Intl.DateTimeFormat('en-CA', { timeZone: TIME_ZONE, year: 'numeric', month: '2-digit', day: '2-digit' }).format(scheduledDate);
     const time = new Intl.DateTimeFormat('en-GB', { timeZone: TIME_ZONE, hour: '2-digit', minute: '2-digit', hour12: false }).format(scheduledDate);
-    const previousAttempts = Number.isFinite(Number(pub.attempts)) ? Number(pub.attempts) : 0;
-    const attempts = Math.max(0, previousAttempts) + 1;
 
-    logger.scheduler(`PROGRAM_START id=${pub.id} product=${pub.product_id} date=${date} time=${time} attempt=${attempts}`);
+    const currentAttempts = Number.isFinite(Number(pub.attempts)) ? Math.max(0, Math.trunc(Number(pub.attempts))) : 0;
+    const maxAttempts = Math.max(1, Number.isFinite(Number(pub.max_attempts)) ? Math.trunc(Number(pub.max_attempts)) : 3);
+    if (currentAttempts >= maxAttempts) {
+      logger.scheduler(`PROGRAM_SKIP_MAX_ATTEMPTS id=${pub.id} attempts=${currentAttempts} max=${maxAttempts}`, 'warn');
+      return pub;
+    }
+    const attempts = currentAttempts + 1;
+
+    logger.scheduler(`PROGRAM_START id=${pub.id} product=${pub.product_id} date=${date} time=${time} attempt=${attempts}/${maxAttempts}`);
     const result = await facebookAutomation.schedule({ groupUrl: normalizeGroupUrl(pub.facebook_group_url || settings.facebook_group_url), content: pub.content, affiliateUrl: pub.product.affiliate_url, scheduledDate: date, scheduledTime: time });
     if (!result.success) return storage.updatePublication(pub.id, { status: 'failed', attempts, error_message: result.error || 'Facebook não confirmou o agendamento.' });
     logger.scheduler(`FACEBOOK_SCHEDULE_CONFIRMED id=${pub.id} facebook=${result.postUrl || 'verified-scheduled-posts'}`, 'success');
@@ -131,7 +139,7 @@ export class SchedulerService {
 
   async checkAndProcessDuePublications(): Promise<number> {
     const now = Date.now();
-    const due = (await storage.getPublications('failed')).filter(p => p.next_attempt_at && new Date(p.next_attempt_at).getTime() <= now && new Date(p.scheduled_at).getTime() > now);
+    const due = (await storage.getPublications('failed')).filter(p => p.next_attempt_at && new Date(p.next_attempt_at).getTime() <= now && new Date(p.scheduled_at).getTime() > now && (Number(p.attempts) || 0) < (Number(p.max_attempts) || 3));
     logger.scheduler(`RETRY_SCAN count=${due.length}`);
     for (const pub of due) await this.schedulePublication(pub.id);
     return due.length;
