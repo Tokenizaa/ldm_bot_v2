@@ -175,8 +175,8 @@ class FacebookAutomationService {
     await page.waitForTimeout(1800);
 
     const body = await page.locator('body').innerText().catch(() => '');
-    const needle = content.replace(/\\s+/g, ' ').trim().slice(0, 80);
-    const found = body.replace(/\\s+/g, ' ').includes(needle);
+    const needle = content.replace(/\s+/g, ' ').trim().slice(0, 80);
+    const found = body.replace(/\s+/g, ' ').includes(needle);
     this.log('FACEBOOK_PLANNER_VERIFY', 'url=' + page.url() + ' content_found=' + found);
 
     if (!found) throw new Error('FACEBOOK_SCHEDULE_NOT_VISIBLE_IN_PLANNER');
@@ -192,7 +192,7 @@ class FacebookAutomationService {
       try {
         if (!input.groupUrl?.includes('/groups/')) throw new Error('FACEBOOK_GROUP_URL_INVALID');
         if (!input.affiliateUrl?.includes('/20889')) throw new Error('FACEBOOK_AFFILIATE_URL_INVALID');
-        if (!input.content?.trim() || /https?:\\/\\//i.test(input.content) || /R\\$/i.test(input.content)) throw new Error('FACEBOOK_CONTENT_INVALID');
+        if (!input.content?.trim() || /https?:\/\/i.test(input.content) || /R\$/i.test(input.content)) throw new Error('FACEBOOK_CONTENT_INVALID');
 
         await facebookSession.requireAuthenticated();
         const page = await facebookBrowser.page();
