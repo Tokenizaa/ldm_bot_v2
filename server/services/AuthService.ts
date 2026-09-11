@@ -39,7 +39,7 @@ export class AuthService {
     try {
       const session = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as UserSession;
       if (!session.id || !session.email || Date.now() > session.expiresAt) {
-        this.activeSessions.delete(session.id);
+        if (session.id) this.activeSessions.delete(session.id);
         return null;
       }
       return session;
@@ -72,7 +72,7 @@ export class AuthService {
       const { data: usersData, error: usersError } = await supabase.auth.admin.listUsers({ page: 1, perPage: 1 });
       if (usersError) throw usersError;
       if ((usersData.users || []).length > 0) {
-        return { success: false, error: 'O cadastro inicial já foi concluído. Use a configuração de administrador.' };
+        return { success: false, error: 'O administrador inicial já existe. Use "Configurar/redefinir administrador".' };
       }
 
       const { data, error } = await supabase.auth.admin.createUser({
@@ -94,20 +94,24 @@ export class AuthService {
     }
   }
 
-  async setupAdmin(name: string, email: string, password: string, setupKey: string, supabase?: SupabaseClient | null) {
+  async setupAdmin(name: string, email: string, password: string, supabase?: SupabaseClient | null) {
     const validation = this.validateAdminCredentials(name, email, password);
     if (!validation.success) return validation;
     if (!supabase) return { success: false, error: 'Supabase Auth não está configurado.' };
 
-    const expectedKey = process.env.ADMIN_SETUP_KEY?.trim() || '';
-    const providedKey = String(setupKey || '');
-    const keyMatches = expectedKey.length > 0 && providedKey.length === expectedKey.length
-      && crypto.timingSafeEqual(Buffer.from(providedKey), Buffer.from(expectedKey));
-    if (!keyMatches) {
-      return { success: false, error: 'Chave de configuração inválida.' };
-    }
-
     try {
+      const { data: configRow, error: configError } = await supabase
+        .from('system_config')
+        .select('config')
+        .eq('key', 'admin_setup')
+        .maybeSingle();
+      if (configError) throw configError;
+
+      const setupConfig = (configRow?.config || {}) as { completed_at?: string | null };
+      if (setupConfig.completed_at) {
+        return { success: false, error: 'A configuração inicial do administrador já foi concluída.' };
+      }
+
       const { data: usersData, error: usersError } = await supabase.auth.admin.listUsers({ page: 1, perPage: 10 });
       if (usersError) throw usersError;
 
@@ -131,11 +135,18 @@ export class AuthService {
           email: validation.cleanEmail,
           password: validation.cleanPassword,
           email_confirm: true,
-          user_metadata: { ...(existingUser.user_metadata || {}), name: validation.cleanName },
+          user_metadata: { ...(existingUser.user_metadata || {}), name: validation.cleanName, role: 'admin' },
           app_metadata: { ...(existingUser.app_metadata || {}), role: 'admin' }
         });
         if (error || !data.user) return { success: false, error: error?.message || 'Não foi possível atualizar o administrador.' };
       }
+
+      const { error: saveConfigError } = await supabase.from('system_config').upsert({
+        key: 'admin_setup',
+        config: { completed_at: new Date().toISOString(), admin_email: validation.cleanEmail },
+        updated_at: new Date().toISOString()
+      });
+      if (saveConfigError) throw saveConfigError;
 
       logger.auth(`Administrador configurado: ${validation.cleanEmail}`);
       return this.login(validation.cleanEmail, validation.cleanPassword, supabase);
@@ -167,7 +178,7 @@ export class AuthService {
         id: data.user.id,
         email: data.user.email || cleanEmail,
         name: data.user.user_metadata?.name || cleanEmail.split('@')[0],
-        role: 'admin',
+        role: data.user.app_metadata?.role === 'operator' ? 'operator' : 'admin',
         createdAt: new Date().toISOString(),
         expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000
       };
