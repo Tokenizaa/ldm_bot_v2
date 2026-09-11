@@ -3,7 +3,6 @@ import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import 'dotenv/config';
 import { logger } from './server/services/LoggerService.js';
-import { storage } from './server/services/StorageService.js';
 
 async function startServer() {
   const { apiRouter } = await import('./server/routes/api.js');
@@ -12,6 +11,7 @@ async function startServer() {
   const { facebookSession } = await import('./server/services/FacebookSessionService.js');
   const { facebookAutomation } = await import('./server/services/FacebookAutomationService.js');
   const { scheduler } = await import('./server/services/SchedulerService.js');
+  const { storage } = await import('./server/services/StorageService.js');
 
   const app = express();
   const PORT = Number(process.env.PORT || 3000);
@@ -53,7 +53,7 @@ async function startServer() {
           return;
         }
 
-        // The same persistent browser/context/page is kept throughout the process.
+        // One persistent browser/context/page is reused for the complete flow.
         // The preflight intentionally leaves the browser on the real group page.
         const result = await scheduler.ensureMonthlySchedule();
         logger.scheduler(`STARTUP_MONTHLY_SCHEDULE confirmed=${result.scheduled.length} message=${result.message}`, 'success');
