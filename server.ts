@@ -9,9 +9,7 @@ async function startServer() {
   const { authRouter } = await import('./server/routes/auth.js');
   const { frontendCompatRouter } = await import('./server/routes/frontend-compat.js');
   const { facebookSession } = await import('./server/services/FacebookSessionService.js');
-  const { facebookBrowser } = await import('./server/services/FacebookBrowserService.js');
   const { scheduler } = await import('./server/services/SchedulerService.js');
-  const { storage } = await import('./server/services/StorageService.js');
 
   const app = express();
   const PORT = Number(process.env.PORT || 3000);
@@ -46,34 +44,15 @@ async function startServer() {
           return;
         }
 
-        const settings = await storage.getSettings();
-        const page = await facebookBrowser.page();
-        const expected = new URL(settings.facebook_group_url);
-        const actual = new URL(page.url());
-        const normalizedExpected = expected.pathname.replace(/\/+$/, '');
-        const normalizedActual = actual.pathname.replace(/\/+$/, '');
-        const title = await page.title().catch(() => '');
-        const groupDetected = actual.origin === expected.origin &&
-          normalizedActual === normalizedExpected &&
-          /A Loja Do Mecânico/i.test(title);
-
-        logger.facebook(
-          `STEP=GROUP_VERIFY accessible=${groupDetected} url=${page.url()} title=${title}`,
-          groupDetected ? 'success' : 'error'
-        );
-
-        if (!groupDetected) {
-          logger.scheduler(
-            `STARTUP_MONTHLY_SCHEDULE skipped: grupo Facebook não validado. url=${page.url()} title=${title}`,
-            'error'
-          );
-          return;
-        }
-
-        // One persistent browser/context/page is reused for the complete flow.
-        // The preflight intentionally leaves the browser on the real group page.
+        // Facebook automation owns navigation and the real native scheduling flow.
+        // Startup must not inspect the current page, navigate to Facebook home,
+        // or perform a duplicate group preflight. about:blank is a valid initial
+        // browser state; the automation navigates directly to the configured group.
         const result = await scheduler.ensureMonthlySchedule();
-        logger.scheduler(`STARTUP_MONTHLY_SCHEDULE confirmed=${result.scheduled.length} message=${result.message}`, 'success');
+        logger.scheduler(
+          `STARTUP_MONTHLY_SCHEDULE confirmed=${result.scheduled.filter(p => p.status === 'scheduled').length} message=${result.message}`,
+          'success'
+        );
       } catch (error: any) {
         logger.scheduler('STARTUP_MONTHLY_SCHEDULE failed: ' + error.message, 'error');
       }
