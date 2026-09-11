@@ -161,7 +161,7 @@ apiRouter.post('/scheduler/run-due', async (_req, res) => {
   catch (err: any) { res.status(500).json({ success: false, error: err.message }); }
 });
 
-apiRouter.get('/facebook/status', (_req, res) => res.json({ success: true, ...facebookService.getStatus() }));
+apiRouter.get('/facebook/status', async (_req, res) => { try { res.json({ success: true, ...(await facebookService.refreshPersistentSessionStatus()) }); } catch (err: any) { res.status(500).json({ success: false, error: err.message }); } });
 apiRouter.post('/facebook/connect', async (_req, res) => {
   try { res.json(await facebookService.connectSession()); }
   catch (err: any) { res.status(500).json({ success: false, error: err.message }); }
