@@ -180,7 +180,7 @@ export class CrawlerService {
         originalUrls.add(originalUrl);
         existingIdentityByUrl.set(originalUrl, existing.product_identity_key);
         if (productId && !existingIdentityByProductId.has(productId)) {
-          existingIdentityByProductId.set(productId, `ldm:${productId}`);
+          existingIdentityByProductId.set(productId, existing.product_identity_key);
         }
       } catch {
         // Ignore legacy/malformed rows.
