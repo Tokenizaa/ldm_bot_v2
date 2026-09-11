@@ -11,12 +11,14 @@ const __dirname = path.dirname(__filename);
 async function startServer() {
   // Load application services only after dotenv has populated process.env.
   const { apiRouter } = await import('./server/routes/api.js');
+  const { authRouter } = await import('./server/routes/auth.js');
   const { frontendCompatRouter } = await import('./server/routes/frontend-compat.js');
   const app = express();
   const PORT = Number(process.env.PORT || 3000);
 
   app.use(express.json({ limit: '10mb' }));
   app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+  app.use('/api', authRouter);
   app.use('/api', apiRouter);
   app.use('/api', frontendCompatRouter);
 
