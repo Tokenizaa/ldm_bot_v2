@@ -8,7 +8,6 @@ async function startServer() {
   const { apiRouter } = await import('./server/routes/api.js');
   const { authRouter } = await import('./server/routes/auth.js');
   const { frontendCompatRouter } = await import('./server/routes/frontend-compat.js');
-  const { facebookSession } = await import('./server/services/FacebookSessionService.js');
   const { scheduler } = await import('./server/services/SchedulerService.js');
 
   const app = express();
@@ -35,28 +34,9 @@ async function startServer() {
 
   app.listen(PORT, '0.0.0.0', () => {
     logger.system(`ForgeDeals Server running on http://0.0.0.0:${PORT}`);
-    void (async () => {
-      try {
-        const status = await facebookSession.start();
-        logger.system(`Facebook startup status=${status.status}`);
-        if (!status.connected) {
-          logger.scheduler('STARTUP_MONTHLY_SCHEDULE skipped: Facebook session not authenticated.', 'warn');
-          return;
-        }
-
-        // Facebook automation owns navigation and the real native scheduling flow.
-        // Startup must not inspect the current page, navigate to Facebook home,
-        // or perform a duplicate group preflight. about:blank is a valid initial
-        // browser state; the automation navigates directly to the configured group.
-        const result = await scheduler.ensureMonthlySchedule();
-        logger.scheduler(
-          `STARTUP_MONTHLY_SCHEDULE confirmed=${result.scheduled.filter(p => p.status === 'scheduled').length} message=${result.message}`,
-          'success'
-        );
-      } catch (error: any) {
-        logger.scheduler('STARTUP_MONTHLY_SCHEDULE failed: ' + error.message, 'error');
-      }
-    })();
+    // The HTTP server only starts the application scheduler.
+    // Facebook browser/session/navigation details stay inside the service layer.
+    void scheduler.start();
   });
 }
 
