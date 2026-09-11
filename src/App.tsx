@@ -272,17 +272,7 @@ export default function App() {
     }
   };
 
-  const handlePublishNow = async (id: string) => {
-    try {
-      showToast('Enviando publicação imediatamente ao Facebook...', 'info');
-      await apiRequest(`/api/publications/${id}/publish-now`, { method: 'POST' });
-      showToast('Publicado com sucesso no Facebook Group!', 'success');
-      await fetchAllData();
-    } catch (err: any) {
-      showToast(`Erro ao publicar: ${err.message}`, 'error');
-    }
-  };
-
+  
   const handleRetryPublication = async (id: string) => {
     try {
       await apiRequest(`/api/publications/${id}/retry`, { method: 'POST' });
@@ -293,29 +283,8 @@ export default function App() {
     }
   };
 
-  const handleCancelPublication = async (id: string) => {
-    try {
-      await apiRequest(`/api/publications/${id}/cancel`, { method: 'POST' });
-      showToast('Publicação cancelada.', 'info');
-      await fetchAllData();
-    } catch (err: any) {
-      showToast(`Erro ao cancelar: ${err.message}`, 'error');
-    }
-  };
-
-  const handleReschedulePublication = async (id: string, newDateTime: string) => {
-    try {
-      await apiRequest(`/api/publications/${id}/reschedule`, {
-        method: 'POST',
-        body: JSON.stringify({ scheduled_at: newDateTime })
-      });
-      showToast('Horário atualizado com sucesso!', 'success');
-      await fetchAllData();
-    } catch (err: any) {
-      showToast(`Erro ao reagendar: ${err.message}`, 'error');
-    }
-  };
-
+  
+  
   const handleDeletePublication = async (id: string) => {
     try {
       await apiRequest(`/api/publications/${id}`, { method: 'DELETE' });
@@ -480,7 +449,6 @@ export default function App() {
               onGenerateBatch={handleGenerateTodayBatch}
               onProcessDue={handleProcessDuePublications}
               isRunningCrawler={isRunningCrawler}
-              isGeneratingBatch={isGeneratingBatch}
               isProcessingDue={isProcessingDue}
               onSelectPublication={(pub) => {
                 setSelectedPublicationForCopy(pub);
@@ -507,17 +475,13 @@ export default function App() {
           {activeTab === 'schedule' && (
             <ScheduleTab
               publications={publications}
-              onPublishNow={handlePublishNow}
               onRetry={handleRetryPublication}
-              onCancel={handleCancelPublication}
-              onReschedule={handleReschedulePublication}
               onDelete={handleDeletePublication}
               onViewDetails={(pub) => {
                 setSelectedPublicationForCopy(pub);
                 setSelectedProductForCopy(undefined);
                 setIsCopyModalOpen(true);
               }}
-              onGenerateTodayBatch={handleGenerateTodayBatch}
               onScheduleAll={handleScheduleAll}
               isSchedulingAll={isSchedulingAll}
               isGeneratingBatch={isGeneratingBatch}
