@@ -127,7 +127,17 @@ class FacebookAutomationService {
       name: /Mais opções de post|Mais opções|More options(?: for post)?/i
     }).last();
 
-    await this.clickCanonical(button, 'FACEBOOK_MORE_OPTIONS_NOT_FOUND');
+    this.log('MORE_OPTIONS_STATE', 'count=' + await button.count() + ' visible=' + await button.isVisible().catch(() => false));
+    if (!(await button.count()) || !(await button.isVisible().catch(() => false))) {
+      const visibleButtons = await page.getByRole('button').evaluateAll(nodes => nodes.filter(node => {
+        const el = node as HTMLElement;
+        return !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+      }).map(node => ((node as HTMLElement).innerText || node.getAttribute('aria-label') || '').trim()).filter(Boolean).slice(-20)).catch(() => []);
+      this.log('MORE_OPTIONS_CANDIDATES', JSON.stringify(visibleButtons));
+      throw new Error('FACEBOOK_MORE_OPTIONS_NOT_FOUND');
+    }
+
+    await this.clickCanonical(button, 'FACEBOOK_MORE_OPTIONS_CLICK_FAILED');
     await page.waitForTimeout(500);
     this.log('MORE_OPTIONS_OPENED', 'menu aberto');
 
@@ -242,7 +252,7 @@ class FacebookAutomationService {
           return { success: false, message: 'Nenhum produto real com facebook_copy e afiliado /20889 disponível.' };
         }
 
-        const generated = await contentService.generateCopyForProduct(product);
+        const generated = { content: product.facebook_copy!.trim(), affiliateUrl: product.affiliate_url };
         const page = await facebookBrowser.page();
         await this.goToGroup(page, groupUrl);
         await this.openComposer(page);
