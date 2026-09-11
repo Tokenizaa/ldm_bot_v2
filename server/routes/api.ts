@@ -36,7 +36,31 @@ apiRouter.post('/publications/generate-copy', async (req, res) => { try { const 
 apiRouter.post('/publications', async (req, res) => { try { const { product_id, scheduled_at, content, facebook_group_url } = req.body; if (!product_id || !scheduled_at || !content) return res.status(400).json({ success: false, error: 'product_id, scheduled_at e content são obrigatórios.' }); const product = await storage.getProductById(product_id); if (!product || !product.affiliate_url.endsWith('/20889')) return res.status(400).json({ success: false, error: 'Publicação inválida: produto ou link afiliado real não corresponde.' }); if (!content.trim() || /https?:\/\//i.test(content) || /R\$/i.test(content)) return res.status(400).json({ success: false, error: 'Publicação inválida: a copy deve ser evergreen e não pode conter URL ou preço.' }); const publication = await storage.createPublication({ product_id, scheduled_at, status: 'scheduled', content, facebook_group_url }); res.json({ success: true, publication }); } catch (err: any) { res.status(500).json({ success: false, error: err.message }); } });
 apiRouter.post('/publications/:id/program', async (req, res) => { try { res.json({ success: true, publication: await scheduler.schedulePublication(req.params.id) }); } catch (err: any) { res.status(400).json({ success: false, error: err.message }); } });
 apiRouter.post('/publications/:id/publish-now', async (req, res) => { try { res.json({ success: true, publication: await scheduler.schedulePublication(req.params.id) }); } catch (err: any) { res.status(400).json({ success: false, error: err.message }); } });
-apiRouter.post('/publications/:id/retry', async (req, res) => { try { res.json({ success: true, publication: await scheduler.schedulePublication(req.params.id) }); } catch (err: any) { res.status(400).json({ success: false, error: err.message }); } });
+apiRouter.post('/publications/:id/retry', async (req, res) => {
+  const id = req.params.id;
+  logger.scheduler(`RETRY_REQUEST id=${id}`);
+  try {
+    const prepared = await storage.resetPublicationForRetry(id);
+    if (!prepared) return res.status(404).json({ success: false, error: 'Publicação não encontrada.' });
+    logger.scheduler(`RETRY_PREPARED id=${id} product=${prepared.product_id} scheduled_at=${prepared.scheduled_at}`);
+    const publication = await scheduler.schedulePublication(id);
+    logger.scheduler(`RETRY_RESULT id=${id} status=${publication?.status || 'unknown'} error=${publication?.error_message || 'none'}`);
+    return res.json({ success: true, publication });
+  } catch (err: any) {
+    logger.scheduler(`RETRY_FAILED id=${id} error=${err.message}`, 'error');
+    return res.status(400).json({ success: false, error: err.message });
+  }
+});
+apiRouter.delete('/publications/failed', async (_req, res) => {
+  try {
+    const deleted = await storage.deleteFailedPublications();
+    logger.scheduler(`CLEANUP_FAILED deleted=${deleted}`);
+    res.json({ success: true, deleted });
+  } catch (err: any) {
+    logger.scheduler(`CLEANUP_FAILED_ERROR error=${err.message}`, 'error');
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
 apiRouter.post('/publications/:id/reschedule', async (_req, res) => res.status(400).json({ success: false, error: 'FACEBOOK_NATIVE_RESCHEDULE_UNSUPPORTED' }));
 apiRouter.post('/publications/:id/cancel', async (_req, res) => res.status(400).json({ success: false, error: 'FACEBOOK_NATIVE_CANCEL_UNSUPPORTED' }));
 apiRouter.delete('/publications/:id', async (req, res) => { try { res.json({ success: await storage.deletePublication(req.params.id) }); } catch (err: any) { res.status(500).json({ success: false, error: err.message }); } });
