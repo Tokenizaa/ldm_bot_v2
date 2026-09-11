@@ -10,7 +10,8 @@ async function main() {
     p.original_url &&
     p.current_price > 0 &&
     /^https:\/\/www\.lojadomecanico\.com\.br\/produto\//i.test(p.original_url) &&
-    p.affiliate_url?.endsWith('/20889')
+    p.affiliate_url?.endsWith('/20889') &&
+    Boolean(p.facebook_copy?.trim())
   );
   const distinctUrls = new Set(valid.map(p => p.original_url));
 
