@@ -216,6 +216,27 @@ export class StorageService {
     return true;
   }
 
+  async resetPublicationForRetry(id: string): Promise<Publication | undefined> {
+    const pub = await this.getPublicationById(id);
+    if (!pub) return undefined;
+    const clean = {
+      status: 'scheduled',
+      attempts: 0,
+      next_attempt_at: null,
+      error_message: null,
+      last_attempt_at: new Date().toISOString()
+    };
+    const { data, error } = await this.supabase.from('posts').update(clean).eq('id', id).select('*').maybeSingle();
+    if (error) throw new Error(`Falha ao preparar retry da publicação: ${error.message}`);
+    return data ? this.mapRowToPublication(data, data.affiliate_link_id ? await this.getProductById(data.affiliate_link_id) : undefined) : undefined;
+  }
+
+  async deleteFailedPublications(): Promise<number> {
+    const { data, error } = await this.supabase.from('posts').delete().eq('status', 'failed').select('id');
+    if (error) throw new Error(`Falha ao limpar publicações falhadas: ${error.message}`);
+    return data?.length || 0;
+  }
+
   async getSettings(): Promise<AppSettings> {
     const { data, error } = await this.supabase.from('system_config').select('config').eq('key', 'app_settings').maybeSingle();
     if (error) throw new Error(`Falha ao consultar configurações: ${error.message}`);
