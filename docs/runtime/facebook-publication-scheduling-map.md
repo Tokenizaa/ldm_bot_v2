@@ -1,286 +1,162 @@
-# Mapeamento do Fluxo de Publicação e Agendamento no Facebook
+# Mapeamento Canônico — Publicação e Agendamento Facebook
 
-## Objetivo
-Mapear, usando navegador real autenticado, o fluxo de publicação e agendamento de uma oferta no grupo configurado no projeto `Tokenizaa/ldm_bot_v2`. Este documento separa explicitamente o que foi observado no Facebook do que ainda não foi validado em execução real.
+> **Fonte canônica atual:** `FACEBOOK_DIRECT_SCHEDULE_MAP.md`
+>
+> Este documento substitui o fluxo antigo que passava por **Mais opções**.
 
 ## Ambiente
+
 - Repositório: `Tokenizaa/ldm_bot_v2`
-- Branch: `main`
-- Navegador: Chrome/Chromium via Playwright
-- Perfil persistente: `data/browser-profiles/facebook`
-- Sessão: login e 2FA realizados manualmente
-- Grupo: `A Loja Do Mecânico`
+- Grupo: A Loja Do Mecânico
 - URL: `https://www.facebook.com/groups/tokeniza/`
-- Playwright observado: `1.63.0`
+- Perfil persistente: `data/browser-profiles/facebook`
+- Sessão: reutilizar a sessão autenticada existente.
+- Não criar browser/contexto paralelo.
+- Não fazer login automatizado.
+- Não limpar cookies/storage.
 
-## Correção importante sobre sessão
-A persistência oficial da sessão é o perfil persistente do navegador:
+## Fluxo canônico atual
 
-`data/browser-profiles/facebook`
-
-`storageState.json` **não é mecanismo de persistência da aplicação** e não deve ser criado, exportado, importado ou usado para injetar cookies. A sessão foi validada anteriormente por reutilização do perfil após reinicialização.
-
-Não são utilizados:
-- automação de credenciais;
-- automação de 2FA;
-- cookie injection;
-- bypass de CAPTCHA;
-- stealth/fingerprint spoofing;
-- perfil pessoal cotidiano do Chrome.
-
-## Estado do mapeamento
-
-### VALIDADO POR INSPEÇÃO REAL
-- Grupo acessível.
-- Composer pode ser aberto.
-- Campo de conteúdo pode receber texto.
-- URL pode ser inserida no conteúdo.
-- Facebook tenta gerar preview de link quando consegue acessar a URL.
-- Hashtags permanecem como texto durante a composição.
-- `@everyone` permaneceu como texto literal no grupo testado e não houve autocomplete/conversão para menção real.
-- Menu de mais opções foi observado.
-- Opção `Programar post` foi observada.
-- Campos de data e hora foram observados.
-- O botão `Programar` foi observado e pode ser habilitado após dados válidos.
-
-### AINDA NÃO VALIDADO
-- Clique final em `Programar` criando efetivamente uma publicação agendada.
-- Identificação da publicação na lista de publicações agendadas.
-- Publicação efetiva no horário agendado.
-- Comportamento do Facebook depois do agendamento confirmado.
-- Limites de caracteres.
-- Limites de frequência/spam em múltiplas publicações.
-
-## Fluxo observado
-
-### 1. Acessar o grupo
-Navegar para:
-
-`https://www.facebook.com/groups/tokeniza/`
-
-Confirmar que a URL continua em `/groups/` e que o conteúdo do grupo está disponível para a conta autenticada.
-
-### 2. Abrir composer
-Foi observado o botão equivalente a:
-
-`Escreva algo`
-
-ou um accessible name equivalente a `Criar uma publicação`.
-
-O clique abre o diálogo do composer.
-
-### 3. Preencher conteúdo
-O composer possui campo editável, normalmente com `role="textbox"`/`contenteditable`.
-
-O conteúdo pode conter:
-- título SEO;
-- descrição;
-- características/benefícios;
-- preço;
-- CTA;
-- URL afiliada;
-- hashtags;
-- `@everyone` como texto, quando configurado.
-
-### 4. Link afiliado e preview
-A aplicação deve fornecer uma URL afiliada válida contendo `/20889`.
-
-O preview é responsabilidade do Facebook. O ForgeDeals não deve tentar fabricar o preview.
-
-Durante o mapeamento, uma URL pública real foi usada para observar que o Facebook consegue renderizar preview quando a URL é acessível.
-
-**Importante:** isso demonstra o comportamento do preview do Facebook, mas não constitui validação específica de um URL afiliado real da Loja do Mecânico.
-
-### 5. Hashtags
-Exemplos:
-
-```text
-#furadeira
-#ferramentas
-#oferta
-#lojadomecanico
+```
+Grupo
+  ↓
+Escreva algo...
+  ↓
+Criar post
+  ↓
+Preencher conteúdo
+  ↓
+Programar post   ← botão direto no composer
+  ↓
+Data
+  ↓
+Hora
+  ↓
+Programar
+  ↓
+Verificar /scheduled_posts
 ```
 
-São enviadas como texto. O comportamento visual posterior é responsabilidade do Facebook.
+### Regra crítica
 
-### 6. `@everyone`
-No grupo testado:
+**NÃO clicar em `Mais opções`.**
 
-- não apareceu autocomplete;
-- não foi observada conversão para uma menção real;
-- permaneceu como texto literal.
+O Facebook atual apresenta o botão de agendamento diretamente no rodapé do composer, ao lado do botão de publicação.
 
-Portanto, o ForgeDeals deve tratar `@everyone` como conteúdo textual e não tentar criar uma menção artificial.
+## Selectors comprovados
 
-### 7. Mais opções
-Foi observado um botão equivalente a:
-
-`Mais opções de post`
-
-O clique abre opções adicionais do composer.
-
-### 8. Programar post
-Foi observada a opção:
-
-`Programar post`
-
-Selecioná-la abre o fluxo de agendamento.
-
-### 9. Data
-Foi observado um input de data equivalente a:
-
-```html
-<input type="date">
-```
-
-O valor esperado para automação é:
-
-`YYYY-MM-DD`
-
-A aplicação deve validar previamente que a data não é passada.
-
-### 10. Hora
-Foi observado um input equivalente a:
-
-```html
-<input type="time">
-```
-
-Formato esperado:
-
-`HH:mm`
-
-24 horas.
-
-### 11. Botão de confirmação
-Foi observado um botão equivalente a:
-
-`Programar`
-
-O estado de habilitação depende da validade dos dados de agendamento.
-
-### 12. Confirmação final
-**Não foi executado o clique final em uma publicação real durante o mapeamento original.**
-
-Consequentemente, não é correto afirmar que uma publicação foi efetivamente agendada.
-
-## Mapa técnico dos elementos
-
-| Etapa | Elemento observado | Estratégia de localização | Ação |
-|---|---|---|---|
-| Grupo | Página do grupo | URL `/groups/` | Navegar |
-| Composer | `Escreva algo` / `Criar uma publicação` | role + accessible name + texto | Clicar |
-| Conteúdo | textbox/contenteditable | `[role="dialog"] [role="textbox"]` e equivalentes | Preencher |
-| Preview | bloco/imagem de preview | observar DOM após inserção da URL | Aguardar |
-| Mais opções | `Mais opções de post` | aria-label/role | Clicar |
-| Agendamento | `Programar post` | texto/accessibility | Clicar |
-| Data | `input[type="date"]` | tipo do input | Preencher |
-| Hora | `input[type="time"]` | tipo do input | Preencher |
-| Confirmar | `Programar` | role + accessible name | Clicar somente em teste controlado |
-| Imediato | `Postar` | role + accessible name | Não usar durante teste de agendamento |
-
-Os seletores acima são referências de descoberta, não contratos estáveis. O Facebook pode alterar DOM, textos, atributos e estrutura.
-
-## Contrato desejado do FacebookService
-
-```ts
-publishScheduledPublication({
-  groupUrl: string,
-  content: string,
-  affiliateUrl: string,
-  scheduledDate: string,
-  scheduledTime: string,
-}): Promise<{
-  success: boolean;
-  postUrl?: string;
-  scheduledAt?: string;
-  error?: string;
-}>
-```
-
-## Responsabilidades
-
-### ForgeDeals
-- produto e preço reais;
-- URL afiliada real com `/20889`;
-- SEO;
-- texto da publicação;
-- hashtags;
-- eventual `@everyone` textual;
-- validação do conteúdo;
-- seleção de data/hora segundo as quotas e regras do SchedulerService.
-
-### FacebookService
-- reutilizar o contexto persistente;
-- validar sessão;
-- acessar grupo;
-- abrir composer;
-- preencher conteúdo;
-- aguardar preview quando aplicável;
-- abrir mais opções;
-- selecionar `Programar post`;
-- preencher data/hora;
-- confirmar o agendamento;
-- verificar o resultado observado na interface.
-
-## Status real
-
-| Item | Status |
+| Etapa | Selector comprovado |
 |---|---|
-| Sessão persistente | FUNCIONANDO |
-| Acesso ao grupo | FUNCIONANDO |
-| Composer | FUNCIONANDO |
-| Inserção de conteúdo | FUNCIONANDO |
-| Hashtags | FUNCIONANDO |
-| `@everyone` como texto | FUNCIONANDO; não convertido em menção |
-| Preview de URL | PARCIALMENTE VALIDADO |
-| Preview específico de afiliado `/20889` | NECESSITA VALIDAÇÃO |
-| Mais opções | FUNCIONANDO |
-| `Programar post` | FUNCIONANDO por inspeção |
-| Campo de data | FUNCIONANDO por inspeção |
-| Campo de hora | FUNCIONANDO por inspeção |
-| Botão `Programar` habilitado | FUNCIONANDO por inspeção |
-| Clique final de agendamento real | NÃO VALIDADO |
-| Verificação de publicação agendada | NÃO VALIDADO |
-| Publicação no horário | NÃO VALIDADO |
-| `publishScheduledPublication()` implementado | NÃO IMPLEMENTADO |
-| Integração do SchedulerService com agendamento Facebook | NÃO VALIDADO / NÃO IMPLEMENTADO nesta etapa |
+| Abrir composer | `[aria-label='Escreva algo...']` |
+| Dialog | `[role='dialog'][aria-label='Criar post']` |
+| Conteúdo | `div[role='dialog'][aria-label='Criar post'] [role='textbox']` |
+| Programar direto | `[aria-label='Programar post']` |
+| Publicar (referência) | `[aria-label='Postar']` |
+| Data | `[role='gridcell']` com accessible name da data |
+| Hora | `[role='option']` com accessible name `HH:mm` |
+| Confirmar | `[aria-label='Programar']` |
 
-## Evidências
-Arquivos capturados durante o mapeamento original:
+## Relação dos botões
 
-- `screenshots/groups_page.html` / `groups_page.png`
-- `screenshots/group_page.html` / `group_page.png`
-- `screenshots/group_loaded.html` / `group_loaded.png`
-- `screenshots/composer_opened.html` / `composer_opened.png`
-- `screenshots/composer_filled.html` / `composer_filled.png`
-- `screenshots/after_filling.html` / `after_filling.png`
+No DOM real observado:
 
-As etapas posteriores de confirmação não possuem evidência de execução completa no mapeamento original.
+- `Programar post` = botão de agendamento direto, somente ícone.
+- `Postar` = botão de publicação imediata.
+- Os dois ficam no mesmo rodapé do composer.
+- Não existe menu intermediário entre eles.
+- **Mais opções não participa do fluxo.**
 
-## Correção da auditoria GitHub
+## Data
 
-A verificação direta do GitHub mostrou que o SHA informado anteriormente pelo agente estava incorreto.
+A data é selecionada pela célula real do calendário:
 
-SHA inexistente informado pelo agente:
+```
+[role='gridcell']
+```
 
-`558699d6572f5215d331147d68e495868e51a6ac`
+A automação deve localizar a célula pelo accessible name correspondente à data desejada, por exemplo:
 
-SHA real do commit encontrado no GitHub:
+```
+12 de setembro de 2026
+```
 
-`558699d6572f5215d331147d68e495ea5bf92510`
+Formato interno da aplicação:
 
-O commit real é:
+```
+YYYY-MM-DD
+```
 
-`docs: add Facebook publication and scheduling map`
+## Hora
 
-E a branch `main` aponta atualmente para:
+O horário é selecionado pela opção real apresentada pelo Facebook:
 
-`558699d6572f5215d331147d68e495ea5bf92510`
+```
+[role='option']
+```
 
-Portanto, o agente **não implementou `publishScheduledPublication()` nessa execução**. O commit encontrado é documental.
+Exemplo:
 
-## Conclusão
-O mapa do fluxo Facebook está documentado, mas o agendamento real ainda não pode ser classificado como funcionando em produção.
+```
+10:30
+```
 
-O próximo passo técnico é implementar `publishScheduledPublication()` seguindo este mapa, sem alterar a arquitetura de sessão persistente, e então executar um único teste controlado de agendamento real antes de integrar o fluxo ao SchedulerService.
+Formato interno:
+
+```
+HH:mm
+```
+
+## Confirmação
+
+Após data e hora:
+
+1. localizar `[aria-label='Programar']`;
+2. verificar que está habilitado;
+3. clicar;
+4. aguardar fechamento/retorno do composer;
+5. acessar `/scheduled_posts`;
+6. confirmar que a publicação aparece.
+
+## Resultado comprovado pelo mapeamento direto
+
+O teste real executado pelo MCP Playwright confirmou:
+
+- sessão existente reutilizada;
+- grupo acessível;
+- composer aberto;
+- conteúdo preenchido;
+- **Programar post clicado diretamente**;
+- data selecionada;
+- hora selecionada;
+- confirmação `Programar`;
+- publicação encontrada em `/scheduled_posts`.
+
+## Código canônico
+
+O código Playwright capturado no mapeamento está registrado em:
+
+`FACEBOOK_DIRECT_SCHEDULE_MAP.md`
+
+Esse arquivo deve ser tratado como referência primária para alterações futuras do executor Facebook.
+
+## Proibições
+
+Não reintroduzir:
+
+- `Mais opções`;
+- `Mais opções de post`;
+- `Programar post` como item de menu;
+- `input[type="date"]` como contrato do fluxo;
+- `input[type="time"]` como contrato do fluxo;
+- selectors baseados em classes CSS geradas;
+- segundo browser/contexto;
+- novo login;
+- reset do perfil.
+
+## Estado
+
+O fluxo de agendamento deve ser considerado:
+
+**Composer → Programar post → Data → Hora → Programar**
+
+Qualquer implementação diferente deste fluxo está divergente da evidência real e deve ser corrigida antes de novos testes.
