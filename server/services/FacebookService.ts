@@ -106,7 +106,8 @@ export class FacebookService {
     try {
       const context = await this.getOrCreateBrowserContext();
       const page = await this.getWorkingPage(context);
-      await page.goto('https://www.facebook.com', { waitUntil: 'domcontentloaded', timeout: 30000 });
+      const targetUrl = process.env.FACEBOOK_GROUP_URL || 'https://www.facebook.com/groups/tokeniza/';
+      await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
       if (!(await this.checkPageLoginStatus(page))) {
         this.sessionStatus = { ...this.sessionStatus, connected: false, status: 'requires_reauth', details: 'Facebook solicita autenticação manual.' };
         return false;
@@ -180,13 +181,168 @@ export class FacebookService {
   }
 
   private async openScheduling(page: Page): Promise<boolean> {
-    const more = page.locator('[role="dialog"] [aria-label*="Mais opções"], [role="dialog"] [aria-label*="More options"]').first();
+    const dialog = page.locator('[role="dialog"]').last();
+    const more = dialog.locator('button[aria-label="Mais opções de post"], button[aria-label*="Mais opções"], button[aria-label*="More options"]').first();
     if (!(await more.count())) return false;
     await more.click({ timeout: 10000 });
-    const option = page.locator('[role="menuitem"]:has-text("Programar post"), [role="menuitem"]:has-text("Agendar post"), text=/Programar post/i, text=/Agendar post/i').first();
+
+    const option = page.getByRole('menuitem', { name: /Programar post|Agendar post/i }).first();
     if (!(await option.count())) return false;
     await option.click({ timeout: 10000 });
-    return await page.locator('input[type="date"], input[type="time"]').count() >= 1;
+
+    return await page.getByRole('button', { name: 'Abrir seletor de data' }).count() > 0
+      && await page.getByRole('button', { name: 'Abrir seletor de hora' }).count() > 0;
+  }
+
+  private async selectFacebookDate(page: Page, date: string): Promise<boolean> {
+    const [year, month, day] = date.split('-').map(Number);
+    const picker = page.getByRole('button', { name: 'Abrir seletor de data' }).last();
+    if (!(await picker.count())) return false;
+    await picker.click({ timeout: 10000 });
+
+    const target = new Date(year, month - 1, day);
+    const label = new Intl.DateTimeFormat('pt-BR', {
+      weekday: 'long', day: 'numeric', month: 'long', year: 'numeric'
+    }).format(target);
+
+    const candidates = page.getByRole('gridcell').filter({ hasText: new RegExp(String(day)) });
+    const exact = candidates.filter({ has: page.locator('') });
+    void exact;
+
+    const cells = await page.getByRole('gridcell').all();
+    for (const cell of cells) {
+      const name = ((await cell.getAttribute('aria-label')) || (await cell.innerText().catch(() => ''))).toLowerCase();
+      const normalized = label.toLowerCase();
+      if (name.includes(normalized) || (name.includes(String(day)) && name.includes(String(year)))) {
+        if (!(await cell.isDisabled().catch(() => false))) {
+          await cell.click({ timeout: 10000 });
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  private async selectFacebookTime(page: Page, time: string): Promise<boolean> {
+    const picker = page.getByRole('button', { name: 'Abrir seletor de hora' }).last();
+    if (!(await picker.count())) return false;
+    await picker.click({ timeout: 10000 });
+
+    const option = page.getByRole('option', { name: time, exact: true }).first();
+    if (await option.count()) {
+      await option.click({ timeout: 10000 });
+      return true;
+    }
+
+    const fallback = page.locator('[role="option"]').filter({ hasText: new RegExp('^\\s*' + time.replace(':', '\\:') + '\\s*
+
+  async publishScheduledPublication(input: ScheduledPublicationInput): Promise<ScheduledPublicationResult> {
+    if (!input.groupUrl?.includes('/groups/')) return { success: false, error: 'FACEBOOK_GROUP_ACCESS_FAILED: URL de grupo inválida.' };
+    if (!input.content?.trim()) return { success: false, error: 'FACEBOOK_CONTENT_FIELD_NOT_FOUND: conteúdo vazio.' };
+    if (!input.affiliateUrl || !/^https?:\/\//i.test(input.affiliateUrl) || !input.affiliateUrl.includes('/20889')) return { success: false, error: 'FACEBOOK_AFFILIATE_URL_INVALID' };
+    if (!input.content.includes(input.affiliateUrl) || !input.content.includes('/20889')) return { success: false, error: 'FACEBOOK_AFFILIATE_URL_INVALID: link afiliado não está no conteúdo.' };
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(input.scheduledDate)) return { success: false, error: 'FACEBOOK_DATE_FIELD_NOT_FOUND: data deve ser YYYY-MM-DD.' };
+    if (!/^\d{2}:\d{2}$/.test(input.scheduledTime)) return { success: false, error: 'FACEBOOK_TIME_FIELD_NOT_FOUND: hora deve ser HH:mm.' };
+    const scheduled = new Date(`${input.scheduledDate}T${input.scheduledTime}:00`);
+    if (Number.isNaN(scheduled.getTime()) || scheduled.getHours() !== Number(input.scheduledTime.slice(0, 2)) || scheduled.getMinutes() !== Number(input.scheduledTime.slice(3))) return { success: false, error: 'FACEBOOK_DATE_FIELD_NOT_FOUND: data/hora inválidas.' };
+    if (scheduled.getTime() <= Date.now()) return { success: false, error: 'FACEBOOK_SCHEDULE_IN_PAST' };
+
+    if (!(await this.ensureFacebookSession())) return { success: false, error: 'FACEBOOK_REAUTH_REQUIRED' };
+    const group = await this.verifyGroupAccess(input.groupUrl);
+    if (!group.accessible) return { success: false, error: `FACEBOOK_GROUP_ACCESS_FAILED: ${group.message}` };
+
+    try {
+      const page = await this.getWorkingPage(await this.getOrCreateBrowserContext());
+      await page.goto(input.groupUrl, { waitUntil: 'domcontentloaded', timeout: 35000 });
+      await page.waitForTimeout(1500);
+      if (!(await this.openComposer(page))) return { success: false, error: 'FACEBOOK_COMPOSER_NOT_FOUND' };
+      if (!(await this.fillComposer(page, input.content))) return { success: false, error: 'FACEBOOK_CONTENT_FIELD_NOT_FOUND' };
+      await page.waitForTimeout(2500);
+      if (!(await this.openScheduling(page))) return { success: false, error: 'FACEBOOK_SCHEDULING_UNAVAILABLE' };
+
+      if (!(await this.selectFacebookDate(page, input.scheduledDate))) {
+        return { success: false, error: 'FACEBOOK_DATE_FIELD_NOT_FOUND' };
+      }
+      if (!(await this.selectFacebookTime(page, input.scheduledTime))) {
+        return { success: false, error: 'FACEBOOK_TIME_FIELD_NOT_FOUND' };
+      }
+      await page.waitForTimeout(500);
+
+      const scheduleButton = page.locator('[role="dialog"] [aria-label*="Programar"], [role="dialog"] [aria-label*="Agendar"], [role="button"]:has-text("Programar"), [role="button"]:has-text("Agendar")').last();
+      if (!(await scheduleButton.count())) return { success: false, error: 'FACEBOOK_SCHEDULE_BUTTON_NOT_FOUND' };
+      if (await scheduleButton.isDisabled().catch(() => false) || (await scheduleButton.getAttribute('aria-disabled')) === 'true') return { success: false, error: 'FACEBOOK_SCHEDULE_BUTTON_DISABLED' };
+
+      await scheduleButton.click({ timeout: 10000 });
+      await page.waitForTimeout(2500);
+
+      const successText = page.locator('text=/agendad|programad|scheduled/i').first();
+      const dialogStillOpen = await page.locator('[role="dialog"]').count();
+      const successVisible = await successText.isVisible().catch(() => false);
+      if (!successVisible && dialogStillOpen > 0) {
+        const remainingText = (await page.locator('[role="dialog"]').innerText().catch(() => '')).toLowerCase();
+        if (!/agendad|programad|scheduled|postado|publicado/.test(remainingText)) return { success: false, error: 'FACEBOOK_SCHEDULE_CONFIRMATION_FAILED' };
+      }
+
+      const scheduledAt = scheduled.toISOString();
+      logger.facebook(`Publicação agendada no Facebook para ${scheduledAt}.`);
+      return { success: true, scheduledAt };
+    } catch (error: any) {
+      logger.facebook(`Falha no agendamento Facebook: ${error.message}`, 'error');
+      return { success: false, error: error.message };
+    }
+  }
+
+  async publishSingle(publication: Publication): Promise<{ success: boolean; postUrl?: string; error?: string }> {
+    if (!(await this.ensureFacebookSession())) return { success: false, error: 'Facebook requer autenticação.' };
+    if (!publication.content?.includes('/20889')) return { success: false, error: 'Publicação bloqueada: link afiliado /20889 ausente.' };
+    const settings = await storage.getSettings();
+    const targetGroupUrl = publication.facebook_group_url || settings.facebook_group_url;
+    const group = await this.verifyGroupAccess(targetGroupUrl);
+    if (!group.accessible) return { success: false, error: group.message };
+    try {
+      const page = await this.getWorkingPage(await this.getOrCreateBrowserContext());
+      await page.goto(targetGroupUrl, { waitUntil: 'domcontentloaded', timeout: 35000 });
+      await page.waitForTimeout(1500);
+      if (!(await this.openComposer(page))) return { success: false, error: 'Composer real do grupo não foi encontrado.' };
+      if (!(await this.fillComposer(page, publication.content))) return { success: false, error: 'Campo de conteúdo não encontrado.' };
+      const submit = page.locator('[role="dialog"] [aria-label="Publicar"], [role="dialog"] [aria-label="Postar"], [role="button"]:has-text("Publicar"), [role="button"]:has-text("Postar")').first();
+      if (!(await submit.count())) return { success: false, error: 'Botão real de publicação não foi encontrado.' };
+      await submit.click();
+      const confirmed = await page.locator('[role="dialog"]').waitFor({ state: 'hidden', timeout: 15000 }).then(() => true).catch(() => false);
+      return confirmed ? { success: true } : { success: false, error: 'Publicação não foi confirmada pelo Facebook.' };
+    } catch (error: any) { return { success: false, error: error.message }; }
+  }
+
+  async publishBatch(publications: Publication[]): Promise<{ results: Array<{ id: string; success: boolean; postUrl?: string; error?: string }> }> {
+    const results: Array<{ id: string; success: boolean; postUrl?: string; error?: string }> = [];
+    if (!(await this.ensureFacebookSession())) return { results: publications.map(p => ({ id: p.id, success: false, error: 'Facebook requer autenticação.' })) };
+    for (const publication of publications) results.push({ id: publication.id, ...(await this.publishSingle(publication)) });
+    return { results };
+  }
+
+  async publishTest(groupUrl: string): Promise<{ success: boolean; postUrl?: string; error?: string }> {
+    if (!groupUrl) return { success: false, error: 'Grupo não configurado.' };
+    if (!(await this.ensureFacebookSession())) return { success: false, error: 'Facebook requer autenticação.' };
+    const page = await this.getWorkingPage(await this.getOrCreateBrowserContext());
+    await page.goto(groupUrl, { waitUntil: 'domcontentloaded', timeout: 35000 });
+    if (!(await this.openComposer(page))) return { success: false, error: 'Composer não encontrado.' };
+    const content = 'FORGEDEALS — TESTE DE CONEXÃO\n\nEsta é uma publicação de teste solicitada pelo operador. Não representa uma oferta comercial.';
+    if (!(await this.fillComposer(page, content))) return { success: false, error: 'Campo de conteúdo não encontrado.' };
+    const submit = page.locator('[role="dialog"] [aria-label="Publicar"], [role="dialog"] [aria-label="Postar"], [role="button"]:has-text("Publicar"), [role="button"]:has-text("Postar")').first();
+    if (!(await submit.count())) return { success: false, error: 'Botão de publicação não encontrado.' };
+    await submit.click();
+    const confirmed = await page.locator('[role="dialog"]').waitFor({ state: 'hidden', timeout: 15000 }).then(() => true).catch(() => false);
+    return confirmed ? { success: true } : { success: false, error: 'Teste não confirmado pelo Facebook.' };
+  }
+}
+
+export const facebookService = new FacebookService();
+) }).first();
+    if (await fallback.count()) {
+      await fallback.click({ timeout: 10000 });
+      return true;
+    }
+    return false;
   }
 
   async publishScheduledPublication(input: ScheduledPublicationInput): Promise<ScheduledPublicationResult> {
