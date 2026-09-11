@@ -541,7 +541,6 @@ export default function App() {
             showToast(`Erro ao agendar: ${err.message}`, 'error');
           }
         }}
-        onPublishNow={handlePublishNow}
       />
     </div>
   );
