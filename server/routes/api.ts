@@ -40,6 +40,21 @@ apiRouter.post('/publications/:id/retry', async (req, res) => {
   const id = req.params.id;
   logger.scheduler(`RETRY_REQUEST id=${id}`);
   try {
+    const existing = await storage.getPublicationById(id);
+    if (!existing) return res.status(404).json({ success: false, error: 'Publicação não encontrada.' });
+
+    // If status is 'unknown', audit Facebook planner first to prevent duplicates
+    if (existing.status === 'unknown') {
+      const reconciled = await scheduler.reconcileUnknownPublication(id);
+      if (reconciled.status === 'scheduled') {
+        return res.json({
+          success: true,
+          publication: reconciled,
+          message: 'Publicação já confirmada no planner do Facebook sem criar duplicidade.'
+        });
+      }
+    }
+
     const prepared = await storage.resetPublicationForRetry(id);
     if (!prepared) return res.status(404).json({ success: false, error: 'Publicação não encontrada.' });
     logger.scheduler(`RETRY_PREPARED id=${id} product=${prepared.product_id} scheduled_at=${prepared.scheduled_at}`);
@@ -49,6 +64,14 @@ apiRouter.post('/publications/:id/retry', async (req, res) => {
   } catch (err: any) {
     logger.scheduler(`RETRY_FAILED id=${id} error=${err.message}`, 'error');
     return res.status(400).json({ success: false, error: err.message });
+  }
+});
+apiRouter.post('/publications/:id/reconcile-unknown', async (req, res) => {
+  try {
+    const publication = await scheduler.reconcileUnknownPublication(req.params.id);
+    res.json({ success: true, publication });
+  } catch (err: any) {
+    res.status(400).json({ success: false, error: err.message });
   }
 });
 apiRouter.delete('/publications/failed', async (_req, res) => {
@@ -64,8 +87,26 @@ apiRouter.delete('/publications/failed', async (_req, res) => {
 apiRouter.post('/publications/:id/reschedule', async (req, res) => { try { res.json({ success: true, publication: await scheduler.reschedule(req.params.id, req.body.scheduled_at) }); } catch (err: any) { res.status(400).json({ success: false, error: err.message }); } });
 apiRouter.post('/publications/:id/cancel', async (_req, res) => res.status(400).json({ success: false, error: 'FACEBOOK_NATIVE_CANCEL_UNSUPPORTED' }));
 apiRouter.delete('/publications/:id', async (req, res) => { try { res.json({ success: await storage.deletePublication(req.params.id) }); } catch (err: any) { res.status(500).json({ success: false, error: err.message }); } });
-apiRouter.post('/scheduler/batch-today', async (req, res) => { try { res.json({ success: true, ...(await scheduler.scheduleDailyBatch(req.body.targetDate)) }); } catch (err: any) { res.status(500).json({ success: false, error: err.message }); } });
-apiRouter.post('/scheduler/run-due', async (_req, res) => { try { res.json({ success: true, processed: await scheduler.checkAndProcessDuePublications() }); } catch (err: any) { res.status(500).json({ success: false, error: err.message }); } });
+apiRouter.post('/scheduler/batch-today', async (req, res) => {
+  try {
+    res.json({ success: true, ...(await scheduler.scheduleDailyBatch(req.body.targetDate)) });
+  } catch (err: any) {
+    if (err.message?.includes('LOCK_BUSY')) {
+      return res.status(409).json({ success: false, error: err.message });
+    }
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+apiRouter.post(['/scheduler/run-due', '/scheduler/process-due'], async (_req, res) => {
+  try {
+    res.json({ success: true, processed: await scheduler.checkAndProcessDuePublications() });
+  } catch (err: any) {
+    if (err.message?.includes('LOCK_BUSY')) {
+      return res.status(409).json({ success: false, error: err.message });
+    }
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
 apiRouter.get('/facebook/status', async (_req, res) => { try { res.json({ success: true, ...(await facebookSession.refresh()) }); } catch (err: any) { res.status(500).json({ success: false, error: err.message }); } });
 apiRouter.post('/facebook/connect', async (_req, res) => { try { res.json(await facebookSession.connect()); } catch (err: any) { res.status(500).json({ success: false, error: err.message }); } });
 apiRouter.post('/facebook/verify-session', async (_req, res) => { try { const status = await facebookSession.refresh(); res.json({ success: status.connected, status }); } catch (err: any) { res.status(500).json({ success: false, error: err.message }); } });

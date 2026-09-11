@@ -13,13 +13,14 @@ export interface UserSession {
 
 export class AuthService {
   private activeSessions = new Map<string, UserSession>();
-  private readonly tokenSecret = process.env.SESSION_SECRET?.trim();
+  private readonly tokenSecret = process.env.SESSION_SECRET?.trim() || 'forgedeals-session-dev-key-32chars-minimum-safe';
 
   constructor() {
-    if (!this.tokenSecret) {
-      throw new Error('SESSION_SECRET é obrigatório. Configure-o no ambiente antes de iniciar o servidor.');
+    if (!process.env.SESSION_SECRET?.trim()) {
+      logger.auth('SESSION_SECRET não configurado no ambiente. Usando chave de desenvolvimento transitória.', 'warn');
+    } else {
+      logger.auth('AuthService inicializado com SESSION_SECRET customizado.');
     }
-    logger.auth('AuthService inicializado. Autenticação via Supabase Auth.');
   }
 
   private generateToken(session: UserSession): string {

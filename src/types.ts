@@ -18,7 +18,7 @@ export interface Product {
   updated_at: string;
 }
 
-export type PublicationStatus = 'draft' | 'scheduled' | 'publishing' | 'published' | 'failed' | 'cancelled';
+export type PublicationStatus = 'draft' | 'attempting' | 'facebook_submitted' | 'scheduled' | 'publishing' | 'published' | 'failed' | 'unknown' | 'cancelled';
 
 export interface Publication {
   id: string;
@@ -29,8 +29,13 @@ export interface Publication {
   content: string;
   facebook_group_url?: string;
   facebook_post_url?: string;
+  planner_url?: string;
+  idempotency_key?: string;
   published_at?: string;
   error_message?: string;
+  attempts?: number;
+  max_attempts?: number;
+  next_attempt_at?: string;
   created_at: string;
   updated_at: string;
 }
@@ -65,6 +70,7 @@ export interface DashboardStats {
   daily_limit: number;
   remaining_month: number;
   failures: number;
+  unknown?: number;
   next_publication?: Publication;
 }
 

@@ -182,7 +182,7 @@ export const DashboardTab: React.FC<DashboardTabProps> = ({
       </div>
 
       {/* Secondary Metrics */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3.5 sm:gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3.5 sm:gap-4">
         <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 transition-colors">
           <span className="text-xs font-medium text-slate-500 dark:text-slate-400">Produtos Encontrados</span>
           <p className="text-xl font-bold text-slate-900 dark:text-white mt-1">{stats?.products_found || 0}</p>
@@ -196,6 +196,13 @@ export const DashboardTab: React.FC<DashboardTabProps> = ({
         <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 transition-colors">
           <span className="text-xs font-medium text-slate-500 dark:text-slate-400">Produtos Publicados</span>
           <p className="text-xl font-bold text-slate-900 dark:text-white mt-1">{stats?.products_published || 0}</p>
+        </div>
+
+        <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 transition-colors">
+          <span className="text-xs font-medium text-slate-500 dark:text-slate-400">Aguardando Verif.</span>
+          <p className={`text-xl font-bold mt-1 ${stats?.unknown ? 'text-purple-600 dark:text-purple-400' : 'text-slate-400 dark:text-slate-500'}`}>
+            {stats?.unknown || 0}
+          </p>
         </div>
 
         <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 transition-colors">
