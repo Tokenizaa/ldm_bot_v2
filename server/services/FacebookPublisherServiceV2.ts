@@ -1,5 +1,4 @@
 import { Page } from 'playwright';
-import { Product } from '../types.js';
 import { storage } from './StorageService.js';
 import { logger } from './LoggerService.js';
 import { contentService } from './ContentService.js';
@@ -13,55 +12,35 @@ export interface FacebookScheduleInput {
   scheduledDate: string;
   scheduledTime: string;
 }
+export interface FacebookScheduleResult { success: boolean; scheduledAt?: string; postUrl?: string; error?: string; }
 
-export interface FacebookScheduleResult {
-  success: boolean;
-  scheduledAt?: string;
-  postUrl?: string;
-  error?: string;
-}
-
-/** Only publisher. It never owns a browser, never logs in, and never starts a second context. */
 export class FacebookPublisherServiceV2 {
   private queue: Promise<void> = Promise.resolve();
-
-  private async serial<T>(task: () => Promise<T>): Promise<T> {
-    const previous = this.queue;
-    let release!: () => void;
-    this.queue = new Promise(resolve => { release = resolve; });
-    await previous;
-    try { return await task(); } finally { release(); }
-  }
+  private async serial<T>(task: () => Promise<T>): Promise<T> { const previous = this.queue; let release!: () => void; this.queue = new Promise(resolve => { release = resolve; }); await previous; try { return await task(); } finally { release(); } }
 
   private composerEditor(page: Page) {
     return page.locator(
       '[role="dialog"] [data-lexical-editor="true"][contenteditable="true"]:not([aria-label*="Comente" i]), ' +
       '[role="dialog"] [contenteditable="true"][role="textbox"]:not([aria-label*="Comente" i]), ' +
       '[role="dialog"] [contenteditable="true"][aria-placeholder*="Escreva" i]'
-    ).filter({ visible: true }).first();
+    ).first();
   }
 
-  private async openComposer(page: Page): Promise<Page> {
+  private async openComposer(page: Page): Promise<void> {
     const triggers = [
       page.getByRole('button', { name: /Escreva algo|No que você está pensando|Criar uma publicação/i }).first(),
       page.locator('[role="button"][aria-label*="Criar uma publicação" i]').first(),
       page.locator('[role="button"][aria-label*="Escreva algo" i]').first(),
       page.locator('div[role="button"]').filter({ hasText: /Escreva algo|No que você está pensando|Criar uma publicação/i }).first()
     ];
-
     for (const trigger of triggers) {
       if (!(await trigger.count().catch(() => 0)) || !(await trigger.isVisible().catch(() => false))) continue;
       await trigger.scrollIntoViewIfNeeded().catch(() => undefined);
-      try {
-        await trigger.click({ timeout: 8000 });
-      } catch {
-        const box = await trigger.boundingBox().catch(() => null);
-        if (!box) continue;
-        await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
-      }
+      try { await trigger.click({ timeout: 8000 }); }
+      catch { const box = await trigger.boundingBox().catch(() => null); if (!box) continue; await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2); }
       await page.waitForTimeout(1000);
       const editor = this.composerEditor(page);
-      if (await editor.count() && await editor.isVisible().catch(() => false)) return page;
+      if (await editor.count() && await editor.isVisible().catch(() => false)) return;
     }
     throw new Error('FACEBOOK_COMPOSER_NOT_FOUND');
   }
@@ -83,7 +62,6 @@ export class FacebookPublisherServiceV2 {
     const editor = this.composerEditor(page);
     const before = await editor.textContent().catch(() => '');
     if (!before?.includes(affiliateUrl)) throw new Error('FACEBOOK_LINK_PREVIEW_NOT_CREATED');
-
     await editor.focus();
     await page.keyboard.press('End');
     await page.keyboard.press('Shift+Home');
@@ -112,13 +90,9 @@ export class FacebookPublisherServiceV2 {
     await picker.click({ timeout: 10000 });
     const target = new Date(year, month - 1, day);
     const monthName = new Intl.DateTimeFormat('pt-BR', { month: 'long' }).format(target).toLowerCase();
-    const cells = await page.getByRole('gridcell').all();
-    for (const cell of cells) {
+    for (const cell of await page.getByRole('gridcell').all()) {
       const label = ((await cell.getAttribute('aria-label')) || (await cell.innerText().catch(() => ''))).toLowerCase();
-      if (label.includes(String(day)) && label.includes(String(year)) && label.includes(monthName) && !(await cell.isDisabled().catch(() => false))) {
-        await cell.click({ timeout: 10000 });
-        return;
-      }
+      if (label.includes(String(day)) && label.includes(String(year)) && label.includes(monthName) && !(await cell.isDisabled().catch(() => false))) { await cell.click({ timeout: 10000 }); return; }
     }
     throw new Error('FACEBOOK_DATE_OPTION_NOT_FOUND');
   }
@@ -136,14 +110,11 @@ export class FacebookPublisherServiceV2 {
     const dialog = page.locator('[role="dialog"]').last();
     const button = dialog.getByRole('button', { name: /^(Programar|Agendar|Schedule)$/i }).last();
     if (!(await button.count())) throw new Error('FACEBOOK_SCHEDULE_BUTTON_NOT_FOUND');
-    if (await button.isDisabled().catch(() => false) || (await button.getAttribute('aria-disabled')) === 'true') {
-      throw new Error('FACEBOOK_SCHEDULE_BUTTON_DISABLED');
-    }
+    if (await button.isDisabled().catch(() => false) || (await button.getAttribute('aria-disabled')) === 'true') throw new Error('FACEBOOK_SCHEDULE_BUTTON_DISABLED');
     await button.click({ timeout: 10000 });
     await page.waitForTimeout(2500);
-    const confirmation = page.getByText(/agendad|programad|scheduled/i).last();
     const dialogStillOpen = await dialog.isVisible().catch(() => false);
-    if (dialogStillOpen && !(await confirmation.isVisible().catch(() => false))) {
+    if (dialogStillOpen) {
       const text = (await dialog.innerText().catch(() => '')).toLowerCase();
       if (!/agendad|programad|scheduled/.test(text)) throw new Error('FACEBOOK_SCHEDULE_CONFIRMATION_FAILED');
     }
@@ -157,7 +128,6 @@ export class FacebookPublisherServiceV2 {
         if (!input.content?.trim() || /https?:\/\//i.test(input.content) || /R\$/i.test(input.content)) throw new Error('FACEBOOK_CONTENT_INVALID');
         const target = new Date(`${input.scheduledDate}T${input.scheduledTime}:00`);
         if (Number.isNaN(target.getTime()) || target.getTime() <= Date.now()) throw new Error('FACEBOOK_SCHEDULE_IN_PAST');
-
         await facebookSession.requireAuthenticated();
         const page = await facebookBrowser.page();
         await page.goto(input.groupUrl, { waitUntil: 'commit', timeout: 60000 });
@@ -172,10 +142,7 @@ export class FacebookPublisherServiceV2 {
         const scheduledAt = target.toISOString();
         logger.facebook(`Facebook agendou ${scheduledAt} no grupo ${input.groupUrl}`);
         return { success: true, scheduledAt };
-      } catch (error: any) {
-        logger.facebook(`Falha no agendamento Facebook: ${error.message}`, 'error');
-        return { success: false, error: error.message };
-      }
+      } catch (error: any) { logger.facebook(`Falha no agendamento Facebook: ${error.message}`, 'error'); return { success: false, error: error.message }; }
     });
   }
 
@@ -188,13 +155,12 @@ export class FacebookPublisherServiceV2 {
         await page.waitForLoadState('domcontentloaded', { timeout: 30000 }).catch(() => undefined);
         await page.waitForTimeout(1500);
         const url = page.url();
-        const blocked = /conteúdo não está disponível|página não encontrada|link pode estar corrompido/i.test(await page.locator('body').innerText().catch(() => ''));
+        const body = await page.locator('body').innerText().catch(() => '');
+        const blocked = /conteúdo não está disponível|página não encontrada|link pode estar corrompido/i.test(body);
         const composer = page.locator('[role="button"]:has-text("Escreva algo"), [aria-label*="Criar uma publicação" i], [aria-label*="Escreva algo" i]').filter({ hasNotText: /Comente como/i }).first();
         const accessible = !blocked && /\/groups\//i.test(url) && await composer.count() > 0;
         return { accessible, message: accessible ? 'Grupo acessível e composer de publicação detectado.' : `Grupo não validado. URL atual: ${url}` };
-      } catch (error: any) {
-        return { accessible: false, message: error.message };
-      }
+      } catch (error: any) { return { accessible: false, message: error.message }; }
     });
   }
 
@@ -216,12 +182,8 @@ export class FacebookPublisherServiceV2 {
         if (!(await publish.count()) || await publish.isDisabled().catch(() => false)) throw new Error('FACEBOOK_PUBLISH_BUTTON_NOT_READY');
         await publish.click({ timeout: 10000 });
         return { success: true, message: `Teste publicado com produto ${product.id}.`, productId: product.id };
-      } catch (error: any) {
-        logger.facebook(`Falha no teste Facebook: ${error.message}`, 'error');
-        return { success: false, message: error.message };
-      }
+      } catch (error: any) { logger.facebook(`Falha no teste Facebook: ${error.message}`, 'error'); return { success: false, message: error.message }; }
     });
   }
 }
-
 export const facebookPublisherV2 = new FacebookPublisherServiceV2();
