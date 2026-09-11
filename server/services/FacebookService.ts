@@ -45,13 +45,47 @@ export class FacebookService {
     return { ...this.sessionStatus };
   }
 
+  /**
+   * Reconstruct application connection state from the persistent browser profile.
+   * This does not navigate, log in, log out, or destroy the browser context.
+   */
+  async refreshPersistentSessionStatus(): Promise<FacebookSessionStatus> {
+    try {
+      const context = await this.getOrCreateBrowserContext();
+      const cookies = await context.cookies('https://www.facebook.com');
+      const authenticated =
+        cookies.some(cookie => cookie.name === 'c_user' && !!cookie.value) &&
+        cookies.some(cookie => cookie.name === 'xs' && !!cookie.value);
+
+      if (authenticated) {
+        this.sessionStatus = {
+          ...this.sessionStatus,
+          connected: true,
+          status: 'connected',
+          connected_user: this.sessionStatus.connected_user || 'Conta Facebook autenticada',
+          details: 'Sessão recuperada do perfil persistente.'
+        };
+      } else if (this.sessionStatus.status === 'connected') {
+        this.sessionStatus = {
+          ...this.sessionStatus,
+          connected: false,
+          status: 'requires_reauth',
+          details: 'O perfil persistente não possui cookies de sessão válidos.'
+        };
+      }
+    } catch (error: any) {
+      logger.facebook(`Falha ao recuperar sessão persistente: ${error.message}`, 'warn');
+    }
+    return this.getStatus();
+  }
+
   private async getOrCreateBrowserContext(): Promise<BrowserContext> {
     if (this.browserContext) return this.browserContext;
     if (this.contextPromise) return this.contextPromise;
 
     this.contextPromise = chromium.launchPersistentContext(this.profileDir, {
       channel: process.env.FACEBOOK_BROWSER_CHANNEL || 'chrome',
-      headless: process.env.FACEBOOK_HEADLESS === 'true',
+      headless: false,
       viewport: { width: 1280, height: 800 },
       args: ['--no-sandbox', '--disable-setuid-sandbox']
     }).then(context => {
@@ -174,10 +208,6 @@ export class FacebookService {
           message: 'Facebook já está autenticado no perfil persistente.',
           connectedUser: this.sessionStatus.connected_user
         };
-      }
-
-      if (process.env.FACEBOOK_HEADLESS === 'true') {
-        return { success: false, message: 'FACEBOOK_HEADLESS=true impede autenticação manual.' };
       }
 
       this.sessionStatus = {
