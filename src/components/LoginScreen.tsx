@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Lock, Mail, User, Wrench, AlertCircle, ArrowRight, ShieldCheck, Moon, Sun, KeyRound } from 'lucide-react';
+import { Lock, Mail, User, Wrench, AlertCircle, ArrowRight, ShieldCheck, Moon, Sun } from 'lucide-react';
 import { setAuthToken } from '../services/apiClient';
 import { SystemUser, ThemeMode } from '../types';
 
@@ -9,14 +9,13 @@ interface LoginScreenProps {
   onThemeChange: (theme: ThemeMode) => void;
 }
 
-type AuthMode = 'login' | 'signup' | 'setup';
+type AuthMode = 'login' | 'setup';
 
 export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess, theme, onThemeChange }) => {
   const [mode, setMode] = useState<AuthMode>('login');
   const [name, setName] = useState('');
-  const [email, setEmail] = useState('');
+  const [email, setEmail] = useState('olfnetto@gmail.com');
   const [password, setPassword] = useState('');
-  const [setupKey, setSetupKey] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -26,12 +25,8 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess, theme,
     setLoading(true);
 
     try {
-      const endpoint = mode === 'signup' ? '/api/auth/signup' : mode === 'setup' ? '/api/auth/setup-admin' : '/api/auth/login';
-      const body = mode === 'signup'
-        ? { name, email, password }
-        : mode === 'setup'
-          ? { name, email, password, setupKey }
-          : { email, password };
+      const endpoint = mode === 'setup' ? '/api/auth/setup-admin' : '/api/auth/login';
+      const body = mode === 'setup' ? { name, email, password } : { email, password };
 
       const res = await fetch(endpoint, {
         method: 'POST',
@@ -53,10 +48,10 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess, theme,
   const switchMode = (next: AuthMode) => {
     setMode(next);
     setError(null);
+    setPassword('');
   };
 
   const isSetup = mode === 'setup';
-  const isSignup = mode === 'signup';
 
   return (
     <div className="min-h-screen flex items-center justify-center p-4 bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 transition-colors">
@@ -83,14 +78,12 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess, theme,
         <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 sm:p-8 shadow-xl">
           <div className="mb-6">
             <h2 className="text-lg font-semibold">
-              {isSetup ? 'Configurar administrador' : isSignup ? 'Criar administrador' : 'Acessar Painel de Controle'}
+              {isSetup ? 'Configurar administrador' : 'Acessar Painel de Controle'}
             </h2>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
               {isSetup
-                ? 'Recupere o acesso do administrador inicial usando a chave de configuração do servidor.'
-                : isSignup
-                  ? 'Crie o primeiro perfil administrativo do ForgeDeals.'
-                  : 'Informe as credenciais da sua conta administrativa.'}
+                ? 'Defina o e-mail e a senha do administrador. O estado de configuração fica salvo no Supabase; não existe chave de setup no .env.'
+                : 'Informe as credenciais da sua conta administrativa.'}
             </p>
           </div>
 
@@ -102,12 +95,12 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess, theme,
           )}
 
           <form onSubmit={handleSubmit} className="space-y-4">
-            {(isSignup || isSetup) && (
+            {isSetup && (
               <div>
                 <label className="block text-xs font-medium mb-1.5">Nome</label>
                 <div className="relative">
                   <User className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-                  <input id="admin-name-input" type="text" required value={name} onChange={(e) => setName(e.target.value)} placeholder="Seu nome" className="w-full pl-10 pr-3.5 py-2.5 text-sm bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500/30 dark:text-white" />
+                  <input id="admin-name-input" type="text" required value={name} onChange={(e) => setName(e.target.value)} placeholder="Administrador ForgeDeals" className="w-full pl-10 pr-3.5 py-2.5 text-sm bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500/30 dark:text-white" />
                 </div>
               </div>
             )}
@@ -126,32 +119,19 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess, theme,
                 <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                 <input id="login-password-input" type="password" required minLength={8} value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" className="w-full pl-10 pr-3.5 py-2.5 text-sm bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500/30 dark:text-white" />
               </div>
-              {(isSignup || isSetup) && <p className="text-[11px] text-slate-500 mt-1.5">Mínimo de 8 caracteres.</p>}
+              {isSetup && <p className="text-[11px] text-slate-500 mt-1.5">Mínimo de 8 caracteres.</p>}
             </div>
 
-            {isSetup && (
-              <div>
-                <label className="block text-xs font-medium mb-1.5">Chave de configuração</label>
-                <div className="relative">
-                  <KeyRound className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-                  <input id="admin-setup-key-input" type="password" required value={setupKey} onChange={(e) => setSetupKey(e.target.value)} placeholder="Chave definida no .env" className="w-full pl-10 pr-3.5 py-2.5 text-sm bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500/30 dark:text-white" />
-                </div>
-              </div>
-            )}
-
-            <button id={isSetup ? 'setup-admin-submit-btn' : isSignup ? 'signup-submit-btn' : 'login-submit-btn'} type="submit" disabled={loading} className="w-full py-2.5 px-4 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-slate-950 font-semibold rounded-xl text-sm flex items-center justify-center gap-2">
+            <button id={isSetup ? 'setup-admin-submit-btn' : 'login-submit-btn'} type="submit" disabled={loading} className="w-full py-2.5 px-4 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-slate-950 font-semibold rounded-xl text-sm flex items-center justify-center gap-2">
               {loading
-                ? <><div className="w-4 h-4 border-2 border-slate-950 border-t-transparent rounded-full animate-spin" /><span>{isSetup ? 'Configurando administrador...' : isSignup ? 'Criando administrador...' : 'Validando credenciais...'}</span></>
-                : <><span>{isSetup ? 'Salvar novo administrador' : isSignup ? 'Criar perfil de administrador' : 'Entrar no Painel'}</span><ArrowRight className="w-4 h-4" /></>}
+                ? <><div className="w-4 h-4 border-2 border-slate-950 border-t-transparent rounded-full animate-spin" /><span>{isSetup ? 'Configurando administrador...' : 'Validando credenciais...'}</span></>
+                : <><span>{isSetup ? 'Salvar administrador' : 'Entrar no Painel'}</span><ArrowRight className="w-4 h-4" /></>}
             </button>
           </form>
 
           <div className="mt-5 flex flex-col items-center gap-2">
             {mode === 'login' ? (
-              <>
-                <button id="show-signup-btn" type="button" onClick={() => switchMode('signup')} className="text-xs font-semibold text-amber-600 dark:text-amber-400 hover:underline">Primeiro acesso? Criar administrador</button>
-                <button id="show-setup-btn" type="button" onClick={() => switchMode('setup')} className="text-xs font-semibold text-slate-600 dark:text-slate-300 hover:underline">Configurar/redefinir administrador</button>
-              </>
+              <button id="show-setup-btn" type="button" onClick={() => switchMode('setup')} className="text-xs font-semibold text-amber-600 dark:text-amber-400 hover:underline">Primeiro acesso ou redefinir administrador</button>
             ) : (
               <button id="show-login-btn" type="button" onClick={() => switchMode('login')} className="text-xs font-semibold text-slate-600 dark:text-slate-300 hover:underline">Voltar ao login</button>
             )}
@@ -159,7 +139,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess, theme,
 
           <div className="mt-6 pt-5 border-t border-slate-100 dark:border-slate-800 flex items-start gap-2.5 text-[11px] text-slate-500 dark:text-slate-400">
             <ShieldCheck className="w-4 h-4 shrink-0 text-emerald-500 mt-0.5" />
-            <div><span className="font-semibold text-slate-700 dark:text-slate-300">Segurança:</span> a configuração administrativa exige a chave definida no servidor e só funciona enquanto houver no máximo um usuário no Supabase Auth.</div>
+            <div><span className="font-semibold text-slate-700 dark:text-slate-300">Segurança:</span> o bootstrap usa o Supabase como fonte de verdade e é concluído uma única vez. Não existe ADMIN_SETUP_KEY no .env.</div>
           </div>
         </div>
       </div>
