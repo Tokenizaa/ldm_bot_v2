@@ -128,17 +128,19 @@ export class FacebookPublisherService {
   }
 
   private buildTestContent(product: Product): string {
-    const price = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(product.current_price);
+    // Canonical Facebook copy: NEVER expose price in the text.
+    // The affiliate URL is the source of truth for the current offer/price.
+    // Keep @todos as the first-class audience mention requested for group posts.
     return [
-      '🔥 OFERTA TESTE — Loja do Mecânico',
+      '🔥 OFERTA — Loja do Mecânico',
       '',
       product.product_name,
-      product.brand ? `Marca: ${product.brand}` : '',
       product.sku ? `Código: ${product.sku}` : '',
-      `💰 ${price}`,
       '',
       'Confira a oferta:',
       product.affiliate_url,
+      '',
+      '@todos',
       '',
       '#oferta #ferramentas #lojadomecanico'
     ].filter(Boolean).join('\n');
