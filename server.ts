@@ -13,6 +13,8 @@ async function startServer() {
   const { authRouter } = await import('./server/routes/auth.js');
   const { frontendCompatRouter } = await import('./server/routes/frontend-compat.js');
   const { facebookSession } = await import('./server/services/FacebookSessionService.js');
+  const { scheduler } = await import('./server/services/SchedulerService.js');
+
   const app = express();
   const PORT = Number(process.env.PORT || 3000);
 
@@ -37,9 +39,22 @@ async function startServer() {
 
   app.listen(PORT, '0.0.0.0', () => {
     logger.system(`ForgeDeals Server running on http://0.0.0.0:${PORT}`);
-    // Exactly one persistent Facebook browser is opened here. It is the same
-    // context later used by the publisher; no publisher creates another browser.
-    void facebookSession.start();
+    void (async () => {
+      try {
+        const status = await facebookSession.start();
+        logger.system(`Facebook startup status=${status.status}`);
+        if (status.connected) {
+          // The database is the queue; Facebook is the source of truth for the
+          // final scheduled state. Fill the remaining monthly slots automatically.
+          const result = await scheduler.ensureMonthlySchedule();
+          logger.scheduler(`STARTUP_MONTHLY_SCHEDULE confirmed=${result.scheduled.length} message=${result.message}`, 'success');
+        } else {
+          logger.scheduler('STARTUP_MONTHLY_SCHEDULE skipped: Facebook session not authenticated.', 'warn');
+        }
+      } catch (error: any) {
+        logger.scheduler('STARTUP_MONTHLY_SCHEDULE failed: ' + error.message, 'error');
+      }
+    })();
   });
 }
 
