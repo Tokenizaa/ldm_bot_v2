@@ -40,6 +40,22 @@ Never invent specifications, benefits, discounts, ratings, stock, shipping, warr
 5. `@todos`.
 6. Relevant hashtags.
 
+## Persistence lifecycle
+
+Copy generation happens during product ingestion, not at publication time.
+
+### Future scrapes
+
+1. Crawler discovers and normalizes the real product.
+2. Product is inserted/updated in `affiliate_links`.
+3. If the product has no copy, or its semantic fields changed (`product_name`, `brand`, `category`, `sku`), the canonical agent generates a new copy.
+4. The copy is saved in `affiliate_links.facebook_copy`.
+5. The scrape is considered prepared only when the product has a non-empty `facebook_copy`.
+
+### Existing products
+
+Use `npm run backfill:copy` to generate copy for every product whose `facebook_copy` is empty. The script is resumable by design: already populated products are skipped.
+
 ## Open Graph publication protocol
 
 The affiliate URL is handled by the publisher, not by the LLM.
@@ -76,5 +92,7 @@ The canonical implementation is:
 - `server/services/ContentService.ts`
 - `server/services/FacebookService.ts`
 - `server/services/FacebookPublisherService.ts`
+- `scripts/backfill-facebook-copy.ts`
+- `docs/migrations/20260911_add_facebook_copy.sql`
 
 The AI model generates the copy; Playwright owns the Open Graph preview lifecycle.
