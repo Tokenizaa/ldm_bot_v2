@@ -243,7 +243,10 @@ export default function App() {
     setIsTestingFb(true);
     try {
       const res = await apiRequest('/api/facebook/test-publish', { method: 'POST' });
-      showToast('Publicação de teste executada com sucesso no grupo!', 'success');
+      if (!res?.success) {
+        throw new Error(res?.message || res?.error || 'Facebook não confirmou a publicação.');
+      }
+      showToast(res.postUrl ? 'Publicação de teste confirmada no Facebook.' : 'Publicação de teste executada; Facebook confirmou o envio.', 'success');
       await fetchAllData();
     } catch (err: any) {
       showToast(`Falha no teste: ${err.message}`, 'error');
