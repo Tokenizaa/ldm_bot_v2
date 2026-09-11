@@ -102,8 +102,8 @@ export class SchedulerService {
       if (localDate.getTime() <= Date.now()) continue;
 
       const generated = await contentService.generateCopyForProduct(product, settings.nvidia_model);
-      if (!generated.content.includes(product.affiliate_url)) {
-        logger.scheduler(`Conteúdo rejeitado para ${product.product_name}: URL afiliada ausente.`, 'error');
+      if (!generated.content.trim() || /https?:\/\//i.test(generated.content) || /R\$/i.test(generated.content)) {
+        logger.scheduler(`Conteúdo rejeitado para ${product.product_name}: copy canônica inválida.`, 'error');
         continue;
       }
 
