@@ -98,11 +98,15 @@ export class SchedulerService {
         logger.scheduler('Agendamento automático pausado: grupo do Facebook não configurado.', 'warn');
         return 0;
       }
+      // Only retry publications that explicitly have a retry scheduled.
+      // A successful native Facebook schedule remains "scheduled" locally and must
+      // never be submitted to Facebook again by the background loop.
       const due = (await storage.getPublications('scheduled')).filter(p => {
-        const retryDue = !p.next_attempt_at || new Date(p.next_attempt_at).getTime() <= now;
-        return retryDue && new Date(p.scheduled_at).getTime() > now;
+        if (!p.next_attempt_at) return false;
+        return new Date(p.next_attempt_at).getTime() <= now
+          && new Date(p.scheduled_at).getTime() > now;
       });
-      for (const pub of due.filter(p => !p.next_attempt_at || new Date(p.next_attempt_at).getTime() <= now)) {
+      for (const pub of due) {
         try { await this.schedulePublication(pub.id); }
         catch (error) { logger.scheduler(`Erro ao processar ${pub.id}: ${error instanceof Error ? error.message : String(error)}`, 'error'); }
       }
