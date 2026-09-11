@@ -27,6 +27,7 @@ export class FacebookService {
   private browserContext: BrowserContext | null = null;
   private contextPromise: Promise<BrowserContext> | null = null;
   private connectPromise: Promise<{ success: boolean; message: string; connectedUser?: string }> | null = null;
+  private automationQueue: Promise<void> = Promise.resolve();
 
   constructor() {
     this.profileDir = path.join(process.cwd(), 'data', 'browser-profiles', 'facebook');
@@ -132,6 +133,14 @@ export class FacebookService {
     }
   }
 
+  private async withAutomationLock<T>(task: () => Promise<T>): Promise<T> {
+    const previous = this.automationQueue;
+    let release!: () => void;
+    this.automationQueue = new Promise<void>(resolve => { release = resolve; });
+    await previous;
+    try { return await task(); } finally { release(); }
+  }
+
   private async waitForManualAuthentication(page: Page): Promise<boolean> {
     const deadline = Date.now() + 5 * 60 * 1000;
     while (Date.now() < deadline) {
@@ -145,10 +154,13 @@ export class FacebookService {
     try {
       const context = await this.getOrCreateBrowserContext();
       const page = await this.getWorkingPage(context);
-      const targetUrl = process.env.FACEBOOK_GROUP_URL || 'https://www.facebook.com/groups/tokeniza/';
-      await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      const cookies = await context.cookies('https://www.facebook.com');
+      const authenticated = cookies.some(cookie => cookie.name === 'c_user' && !!cookie.value)
+        && cookies.some(cookie => cookie.name === 'xs' && !!cookie.value);
 
-      if (!(await this.checkPageLoginStatus(page))) {
+      // Session validation is cookie/DOM based. Do not navigate to the group here:
+      // group navigation is an interaction step and can legitimately timeout/abort.
+      if (!authenticated && !(await this.checkPageLoginStatus(page))) {
         this.sessionStatus = {
           ...this.sessionStatus,
           connected: false,
@@ -260,9 +272,9 @@ export class FacebookService {
       const html = await page.content();
       const blocked = /conteúdo não está disponível|página não encontrada|link pode estar corrompido/i.test(html);
       const composer = await page.locator(
-        '[role="button"]:has-text("Escreva algo"), [aria-label*="Criar uma publicação"], [aria-label*="Escreva algo"]'
-      ).count();
-      const accessible = !blocked && page.url().includes('/groups/') && composer > 0;
+        '[role="button"]:has-text("Escreva algo"), [role="button"]:has-text("No que você está pensando"), [aria-label*="Criar uma publicação" i], [aria-label*="Escreva algo" i]'
+      ).filter({ hasNotText: /Comente como/i }).count();
+      const accessible = !blocked && /\/groups\//i.test(page.url()) && composer > 0;
 
       this.sessionStatus.configured_group_url = groupUrl;
       this.sessionStatus.group_accessible = accessible;
@@ -425,6 +437,10 @@ export class FacebookService {
   }
 
   async publishScheduledPublication(input: ScheduledPublicationInput): Promise<ScheduledPublicationResult> {
+    return this.withAutomationLock(() => this.publishScheduledPublicationInternal(input));
+  }
+
+  private async publishScheduledPublicationInternal(input: ScheduledPublicationInput): Promise<ScheduledPublicationResult> {
     if (!input.groupUrl?.includes('/groups/')) return { success: false, error: 'FACEBOOK_GROUP_ACCESS_FAILED: URL de grupo inválida.' };
     if (!input.content?.trim()) return { success: false, error: 'FACEBOOK_CONTENT_FIELD_NOT_FOUND: conteúdo vazio.' };
     if (!input.affiliateUrl || !/^https?:\/\//i.test(input.affiliateUrl) || !input.affiliateUrl.includes('/20889')) return { success: false, error: 'FACEBOOK_AFFILIATE_URL_INVALID' };
@@ -480,6 +496,10 @@ export class FacebookService {
   }
 
   async publishSingle(publication: Publication): Promise<{ success: boolean; postUrl?: string; error?: string }> {
+    return this.withAutomationLock(() => this.publishSingleInternal(publication));
+  }
+
+  private async publishSingleInternal(publication: Publication): Promise<{ success: boolean; postUrl?: string; error?: string }> {
     if (!(await this.ensureFacebookSession())) return { success: false, error: 'Facebook requer autenticação.' };
     const product = await storage.getProductById(publication.product_id);
     if (!product?.affiliate_url?.includes('/20889')) return { success: false, error: 'Publicação bloqueada: produto sem link afiliado /20889 válido.' };
