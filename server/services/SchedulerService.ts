@@ -34,14 +34,20 @@ export class SchedulerService {
 
     const slotsAvailable = Math.min(settings.daily_limit - reservedToday, settings.monthly_limit - reservedMonth);
     const products = await storage.getProducts(true);
-    const usedProductIds = new Set(allPublications.filter(p => ['scheduled', 'publishing', 'published'].includes(p.status)).map(p => p.product_id));
+    const usedProductIds = new Set(allPublications.map(p => p.product_id));
     const candidates = products.filter(p => !usedProductIds.has(p.id) && p.current_price > 0 && p.product_name && p.original_url && /^https?:\/\//i.test(p.affiliate_url) && p.affiliate_url.includes('/20889'));
     if (!candidates.length) return { scheduled: [], quota: await storage.getQuota(), message: 'Nenhum produto real e elegível disponível. Execute o crawler.' };
 
     const hours = settings.daily_hours.length ? settings.daily_hours : ['08:00', '11:00', '14:00', '17:00', '20:00'];
     const scheduled: Publication[] = [];
-    for (const [index, product] of candidates.slice(0, slotsAvailable).entries()) {
-      const time = hours[index] || '08:00';
+    const occupiedSlots = new Set(allPublications.filter(p => ['scheduled', 'publishing', 'published'].includes(p.status)).map(p => {
+      const value = p.published_at || p.scheduled_at;
+      if (!value || !value.startsWith(datePrefix)) return '';
+      return new Date(value).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false });
+    }).filter(Boolean));
+    const availableHours = hours.filter(time => !occupiedSlots.has(time));
+    for (const [index, product] of candidates.slice(0, Math.min(slotsAvailable, availableHours.length)).entries()) {
+      const time = availableHours[index] || '08:00';
       const [hour, minute] = time.split(':').map(Number);
       if (!Number.isInteger(hour) || !Number.isInteger(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) { logger.scheduler(`Horário inválido ignorado: ${time}`, 'error'); continue; }
       const localDate = new Date(targetDate); localDate.setHours(hour, minute, 0, 0);
