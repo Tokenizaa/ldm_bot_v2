@@ -176,7 +176,8 @@ export class StorageService {
   }
 
   async createPublication(pub: Omit<Publication, 'id' | 'created_at' | 'updated_at'>): Promise<Publication> {
-    if (!pub.content?.includes('/20889')) throw new Error('Publicação recusada: copy sem link afiliado /20889.');
+    // Canonical Facebook copy must be evergreen and contain no product URL or price.
+    // The affiliate URL is persisted on the product and passed separately to Facebook.
     const now = new Date().toISOString();
     const record = {
       id: crypto.randomUUID(), affiliate_link_id: pub.product_id, scheduled_at: pub.scheduled_at,
