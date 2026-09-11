@@ -70,9 +70,20 @@ export class SchedulerService {
     const time = scheduledDate.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false });
     const result = await facebookService.publishScheduledPublication({ groupUrl: pub.facebook_group_url || settings.facebook_group_url, content: pub.content, affiliateUrl: pub.product.affiliate_url, scheduledDate: date, scheduledTime: time });
 
-    if (!result.success) return storage.updatePublication(pub.id, { status: 'failed', error_message: result.error || 'Facebook não confirmou a programação.' });
+    const attempts = (pub.attempts || 0) + 1;
+    if (!result.success) {
+      const maxAttempts = pub.max_attempts || 3;
+      if (attempts < maxAttempts) {
+        const backoffMinutes = Math.min(60, 5 * Math.pow(2, attempts - 1));
+        const nextAttempt = new Date(Date.now() + backoffMinutes * 60000).toISOString();
+        logger.scheduler(`Falha temporária ${pub.id} (tentativa ${attempts}/${maxAttempts}); retry em ${backoffMinutes} min.`, 'warn');
+        return storage.updatePublication(pub.id, { status: 'scheduled', attempts, max_attempts: maxAttempts, next_attempt_at: nextAttempt, error_message: result.error || 'Falha temporária no Facebook.' });
+      }
+      logger.scheduler(`Publicação ${pub.id} falhou definitivamente após ${attempts} tentativas.`, 'error');
+      return storage.updatePublication(pub.id, { status: 'failed', attempts, max_attempts: maxAttempts, next_attempt_at: undefined, error_message: result.error || 'Facebook não confirmou a programação.' });
+    }
     logger.scheduler(`Programação confirmada: ${pub.id} -> ${result.scheduledAt || scheduledDate.toISOString()}`);
-    return storage.updatePublication(pub.id, { status: 'scheduled', error_message: undefined, scheduled_at: result.scheduledAt || scheduledDate.toISOString() });
+    return storage.updatePublication(pub.id, { status: 'scheduled', attempts, next_attempt_at: undefined, error_message: undefined, scheduled_at: result.scheduledAt || scheduledDate.toISOString() });
   }
 
   async checkAndProcessDuePublications(): Promise<number> {
@@ -86,6 +97,14 @@ export class SchedulerService {
       if (!settings.facebook_group_url?.includes('/groups/')) {
         logger.scheduler('Agendamento automático pausado: grupo do Facebook não configurado.', 'warn');
         return 0;
+      }
+      const due = (await storage.getPublications('scheduled')).filter(p => {
+        const retryDue = !p.next_attempt_at || new Date(p.next_attempt_at).getTime() <= now;
+        return retryDue && new Date(p.scheduled_at).getTime() > now;
+      });
+      for (const pub of due) {
+        try { await this.schedulePublication(pub.id); }
+        catch (error) { logger.scheduler(`Erro ao processar ${pub.id}: ${error instanceof Error ? error.message : String(error)}`, 'error'); }
       }
       const result = await this.scheduleDailyBatch();
       if (result.scheduled.length > 0) {
