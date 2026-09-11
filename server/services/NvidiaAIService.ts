@@ -11,6 +11,7 @@ export interface NvidiaGenerationResult {
 
 export class NvidiaAIService {
   private readonly apiUrl = 'https://integrate.api.nvidia.com/v1/chat/completions';
+  private readonly requestTimeoutMs = Number(process.env.NVIDIA_REQUEST_TIMEOUT_MS || 45000);
   private readonly defaultModel = process.env.NVIDIA_MODEL || 'nvidia/nemotron-3.5-lightning-30b-a3b';
   private readonly fallbackModels = [
     'nvidia/nemotron-3-super-120b-a12b',
@@ -27,10 +28,17 @@ export class NvidiaAIService {
     const model = customModel && customModel !== 'unknown'
       ? customModel
       : (process.env.NVIDIA_MODEL || this.defaultModel);
+    const productName = userPrompt.match(/^Nome:\s*(.+)$/m)?.[1]?.trim() || 'produto';
+    const startedAt = Date.now();
 
     if (!apiKey) {
       return { content: '', model, success: false, error: 'NVIDIA_API_KEY não configurada.' };
     }
+
+    logger.ai(`[AI] START model=${model} produto="${productName}" timeout=${this.requestTimeoutMs}ms`);
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.requestTimeoutMs);
 
     try {
       const response = await fetch(this.apiUrl, {
@@ -47,8 +55,11 @@ export class NvidiaAIService {
           ],
           temperature: 0.75,
           max_tokens: 500
-        })
+        }),
+        signal: controller.signal
       });
+
+      const elapsedMs = Date.now() - startedAt;
 
       if (!response.ok) {
         const retryable = [400, 404, 408, 409, 410, 429, 500, 502, 503, 504].includes(response.status);
@@ -57,7 +68,7 @@ export class NvidiaAIService {
 
         if (retryable && candidates.length > 0) {
           const nextModel = candidates[0];
-          logger.ai(`Modelo NVIDIA ${model} falhou (HTTP ${response.status}). Tentando Nemotron fallback ${nextModel}.`, 'warn');
+          logger.ai(`[AI] FAIL model=${model} produto="${productName}" http=${response.status} tempo=${elapsedMs}ms -> fallback=${nextModel}`, 'warn');
           return this.generateRawCopy(systemPrompt, userPrompt, nextModel, [...attemptedModels, model]);
         }
 
@@ -69,19 +80,18 @@ export class NvidiaAIService {
 
       if (!content) {
         const retryCandidates = [this.defaultModel, ...this.fallbackModels]
-        .filter(candidate => !attemptedModels.includes(candidate) && candidate !== model);
+          .filter(candidate => !attemptedModels.includes(candidate) && candidate !== model);
 
-      if (retryCandidates.length > 0) {
-        const nextModel = retryCandidates[0];
-        logger.ai(`Modelo NVIDIA ${model} retornou conteúdo vazio. Tentando Nemotron fallback ${nextModel}.`, 'warn');
-        return this.generateRawCopy(systemPrompt, userPrompt, nextModel, [...attemptedModels, model]);
+        if (retryCandidates.length > 0) {
+          const nextModel = retryCandidates[0];
+          logger.ai(`[AI] EMPTY model=${model} produto="${productName}" tempo=${elapsedMs}ms -> fallback=${nextModel}`, 'warn');
+          return this.generateRawCopy(systemPrompt, userPrompt, nextModel, [...attemptedModels, model]);
+        }
+
+        throw new Error('NVIDIA API retornou uma resposta sem conteúdo após todos os modelos Nemotron.');
       }
 
-      throw new Error('NVIDIA API retornou uma resposta sem conteúdo após todos os modelos Nemotron.');
-    
-      }
-
-      logger.ai(`Copy gerada pelo agente para "${userPrompt.split('\n')[0]}"`);
+      logger.ai(`[AI] OK model=${model} produto="${productName}" tempo=${elapsedMs}ms tokens=${data.usage?.total_tokens ?? 'n/a'}`);
       return {
         content,
         model,
@@ -89,8 +99,26 @@ export class NvidiaAIService {
         success: true
       };
     } catch (err: any) {
-      logger.ai(`Falha NVIDIA: ${err.message}`, 'error');
-      return { content: '', model, success: false, error: err.message };
+      const elapsedMs = Date.now() - startedAt;
+      const isTimeout = err?.name === 'AbortError';
+      const errorMessage = isTimeout
+        ? `NVIDIA API timeout após ${this.requestTimeoutMs}ms`
+        : String(err?.message || err);
+
+      logger.ai(`[AI] FAIL model=${model} produto="${productName}" tempo=${elapsedMs}ms erro="${errorMessage}"`, 'error');
+
+      const candidates = [this.defaultModel, ...this.fallbackModels]
+        .filter(candidate => !attemptedModels.includes(candidate) && candidate !== model);
+
+      if (candidates.length > 0 && (isTimeout || errorMessage.toLowerCase().includes('fetch failed') || errorMessage.toLowerCase().includes('network'))) {
+        const nextModel = candidates[0];
+        logger.ai(`[AI] RETRY model=${model} produto="${productName}" -> fallback=${nextModel}`, 'warn');
+        return this.generateRawCopy(systemPrompt, userPrompt, nextModel, [...attemptedModels, model]);
+      }
+
+      return { content: '', model, success: false, error: errorMessage };
+    } finally {
+      clearTimeout(timeout);
     }
   }
 
