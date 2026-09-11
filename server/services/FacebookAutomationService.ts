@@ -7,8 +7,6 @@ export interface FacebookScheduleInput { groupUrl: string; content: string; affi
 export interface FacebookScheduleResult { success: boolean; scheduledAt?: string; postUrl?: string; error?: string; }
 export interface FacebookPublishInput { groupUrl: string; content: string; affiliateUrl: string; }
 
-const GROUP_SCHEDULED_PATH = '/groups/tokeniza/scheduled_posts';
-
 class FacebookAutomationService {
   private chain: Promise<void> = Promise.resolve();
 
@@ -48,7 +46,7 @@ class FacebookAutomationService {
     this.log('GROUP_NAVIGATION', 'url=' + groupUrl);
     await page.goto(groupUrl, { waitUntil: 'commit', timeout: 60000 });
     await page.waitForTimeout(1500);
-    this.log('GROUP_READY', 'url=' + page.url() + ' title=' + await page.title().catch(() => ''));
+    this.log('GROUP_READY', 'url=' + page.url());
   }
 
   private async openComposer(page: Page) {
@@ -90,6 +88,7 @@ class FacebookAutomationService {
   }
 
   private async setDate(page: Page, date: string) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error('FACEBOOK_DATE_INVALID');
     const target = new Date(date + 'T12:00:00-03:00');
     const label = target.toLocaleDateString('pt-BR', { day: 'numeric', month: 'long', year: 'numeric' });
     const cell = page.locator("[role='gridcell']").filter({ hasText: label }).last();
@@ -99,28 +98,30 @@ class FacebookAutomationService {
   }
 
   private async setTime(page: Page, time: string) {
+    if (!/^\d{2}:\d{2}$/.test(time)) throw new Error('FACEBOOK_TIME_INVALID');
     const option = page.locator("[role='option']").filter({ hasText: time }).last();
     this.log('TIME_WAIT', 'time=' + time);
     await option.waitFor({ state: 'visible', timeout: 15000 });
     await option.click({ timeout: 15000 });
   }
 
-  private async confirmAndVerify(page: Page, content: string) {
+  private async confirmAndVerify(page: Page, groupUrl: string, content: string) {
     const button = page.locator("[aria-label='Programar']").last();
     this.log('CONFIRM_WAIT', "selector=[aria-label='Programar']");
     await button.waitFor({ state: 'visible', timeout: 15000 });
     if (await button.isDisabled().catch(() => false) || await button.getAttribute('aria-disabled') === 'true') throw new Error('FACEBOOK_SCHEDULE_CONFIRM_DISABLED');
     await button.click({ timeout: 15000 });
     await page.waitForTimeout(2500);
-    const expectedUrl = new URL(GROUP_SCHEDULED_PATH, 'https://www.facebook.com').toString();
-    await page.goto(expectedUrl, { waitUntil: 'commit', timeout: 60000 });
+
+    const scheduledUrl = groupUrl.replace(/\/+$/, '') + '/scheduled_posts';
+    await page.goto(scheduledUrl, { waitUntil: 'commit', timeout: 60000 });
     await page.waitForTimeout(1800);
     const body = await page.locator('body').innerText().catch(() => '');
     const needle = content.replace(/\s+/g, ' ').trim().slice(0, 80);
     const found = body.replace(/\s+/g, ' ').includes(needle);
     this.log('FACEBOOK_PLANNER_VERIFY', 'url=' + page.url() + ' content_found=' + found);
     if (!found) throw new Error('FACEBOOK_SCHEDULE_NOT_VISIBLE_IN_PLANNER');
-    return undefined;
+    return scheduledUrl;
   }
 
   async schedule(input: FacebookScheduleInput): Promise<FacebookScheduleResult> {
@@ -131,6 +132,9 @@ class FacebookAutomationService {
         if (!input.groupUrl?.includes('/groups/')) throw new Error('FACEBOOK_GROUP_URL_INVALID');
         if (!input.affiliateUrl?.includes('/20889')) throw new Error('FACEBOOK_AFFILIATE_URL_INVALID');
         if (!input.content?.trim() || /https?:\/\//i.test(input.content) || /R\$/i.test(input.content)) throw new Error('FACEBOOK_CONTENT_INVALID');
+        const target = new Date(input.scheduledDate + 'T' + input.scheduledTime + ':00-03:00');
+        if (Number.isNaN(target.getTime()) || target.getTime() <= Date.now()) throw new Error('FACEBOOK_SCHEDULE_IN_PAST');
+
         await facebookSession.requireAuthenticated();
         const page = await facebookBrowser.page();
         await this.goToGroup(page, input.groupUrl);
@@ -139,8 +143,8 @@ class FacebookAutomationService {
         await this.openScheduleDirect(page);
         await this.setDate(page, input.scheduledDate);
         await this.setTime(page, input.scheduledTime);
-        const postUrl = await this.confirmAndVerify(page, input.content);
-        const scheduledAt = new Date(input.scheduledDate + 'T' + input.scheduledTime + ':00-03:00').toISOString();
+        const postUrl = await this.confirmAndVerify(page, input.groupUrl, input.content);
+        const scheduledAt = target.toISOString();
         this.log('SCHEDULE_SUCCESS', 'scheduledAt=' + scheduledAt + ' durationMs=' + (Date.now() - started), 'success');
         return { success: true, scheduledAt, postUrl };
       } catch (error: any) {
