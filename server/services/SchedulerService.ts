@@ -7,12 +7,14 @@ import { logger } from './LoggerService.js';
 export class SchedulerService {
   private timer: NodeJS.Timeout | null = null;
   private isProcessing = false;
+  private lastAutoScheduleAt = 0;
 
   constructor() { this.startBackgroundTimer(); }
 
   startBackgroundTimer() {
     if (this.timer) clearInterval(this.timer);
     this.timer = setInterval(() => this.checkAndProcessDuePublications().catch(err => logger.scheduler(`Erro: ${err.message}`, 'error')), 60000);
+    void this.checkAndProcessDuePublications().catch(err => logger.scheduler(`Erro inicial: ${err.message}`, 'error'));
     if (this.timer && typeof this.timer.unref === 'function') this.timer.unref();
   }
 
@@ -44,9 +46,9 @@ export class SchedulerService {
       if (!Number.isInteger(hour) || !Number.isInteger(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) { logger.scheduler(`Horário inválido ignorado: ${time}`, 'error'); continue; }
       const localDate = new Date(targetDate); localDate.setHours(hour, minute, 0, 0);
       if (localDate.getTime() <= Date.now()) continue;
-      const generated = await contentService.generateCopyForProduct(product, settings.nvidia_model);
-      if (!generated.content.trim() || /https?:\/\//i.test(generated.content) || /R\$/i.test(generated.content)) { logger.scheduler(`Conteúdo rejeitado para ${product.product_name}: copy canônica inválida.`, 'error'); continue; }
-      const publication = await storage.createPublication({ product_id: product.id, scheduled_at: localDate.toISOString(), status: 'scheduled', content: generated.content, facebook_group_url: settings.facebook_group_url });
+      const content = product.facebook_copy?.trim() || (await contentService.generateCopyForProduct(product, settings.nvidia_model)).content.trim();
+      if (!content || /https?:\/\//i.test(content) || /R\$/i.test(content)) { logger.scheduler(`Conteúdo rejeitado para ${product.product_name}: copy canônica inválida.`, 'error'); continue; }
+      const publication = await storage.createPublication({ product_id: product.id, scheduled_at: localDate.toISOString(), status: 'scheduled', content, facebook_group_url: settings.facebook_group_url });
       const result = await facebookService.publishScheduledPublication({ groupUrl: settings.facebook_group_url, content: generated.content, affiliateUrl: product.affiliate_url, scheduledDate: datePrefix, scheduledTime: time });
       if (result.success) { scheduled.push(publication); logger.scheduler(`Publicação ${publication.id} agendada no Facebook para ${result.scheduledAt || localDate.toISOString()}.`); }
       else { await storage.updatePublication(publication.id, { status: 'failed', error_message: result.error || 'Facebook não confirmou o agendamento.' }); logger.scheduler(`Falha ao agendar ${publication.id}: ${result.error || 'erro desconhecido'}`, 'error'); }
@@ -73,7 +75,27 @@ export class SchedulerService {
     return storage.updatePublication(pub.id, { status: 'scheduled', error_message: undefined, scheduled_at: result.scheduledAt || scheduledDate.toISOString() });
   }
 
-  async checkAndProcessDuePublications(): Promise<number> { return 0; }
+  async checkAndProcessDuePublications(): Promise<number> {
+    if (this.isProcessing) return 0;
+    const now = Date.now();
+    if (now - this.lastAutoScheduleAt < 30000) return 0;
+    this.isProcessing = true;
+    this.lastAutoScheduleAt = now;
+    try {
+      const settings = await storage.getSettings();
+      if (!settings.facebook_group_url?.includes('/groups/')) {
+        logger.scheduler('Agendamento automático pausado: grupo do Facebook não configurado.', 'warn');
+        return 0;
+      }
+      const result = await this.scheduleDailyBatch();
+      if (result.scheduled.length > 0) {
+        logger.scheduler(`Agendamento automático: ${result.scheduled.length} publicação(ões) enviadas ao Facebook.`);
+      }
+      return result.scheduled.length;
+    } finally {
+      this.isProcessing = false;
+    }
+  }
 
   async publishNow(publicationId: string): Promise<Publication | undefined> {
     const pub = await storage.getPublicationById(publicationId);
