@@ -73,37 +73,70 @@ export class FacebookPublisherServiceV2 {
 
   private async openScheduleMenu(page: Page): Promise<void> {
     const dialog = page.locator('[role="dialog"]').last();
-    const more = dialog.locator('button[aria-label*="Mais opções" i], button[aria-label*="More options" i]').last();
-    if (!(await more.count())) throw new Error('FACEBOOK_MORE_OPTIONS_NOT_FOUND');
-    await more.click({ timeout: 10000 });
+    if (!(await dialog.count())) throw new Error('FACEBOOK_COMPOSER_DIALOG_NOT_FOUND');
+
+    // Canonical map: "Mais opções de post" is a semantic control. Prefer
+    // accessible name/role, then visible text; never depend on CSS classes.
+    const candidates = [
+      dialog.getByRole('button', { name: /Mais opções de post|Mais opções|More options(?: for post)?/i }).last(),
+      dialog.locator('[role="button"][aria-label*="Mais opções" i], [role="button"][aria-label*="More options" i]').last(),
+      dialog.getByText(/Mais opções de post|Mais opções|More options(?: for post)?/i).last(),
+      page.getByRole('button', { name: /Mais opções de post|Mais opções|More options(?: for post)?/i }).last(),
+    ];
+
+    let clicked = false;
+    for (const candidate of candidates) {
+      if (!(await candidate.count().catch(() => 0)) || !(await candidate.isVisible().catch(() => false))) continue;
+      await candidate.scrollIntoViewIfNeeded().catch(() => undefined);
+      try {
+        await candidate.click({ timeout: 10000 });
+        clicked = true;
+        break;
+      } catch {
+        const box = await candidate.boundingBox().catch(() => null);
+        if (box) {
+          await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+          clicked = true;
+          break;
+        }
+      }
+    }
+
+    if (!clicked) throw new Error('FACEBOOK_MORE_OPTIONS_NOT_FOUND');
+
     const option = page.getByRole('menuitem', { name: /Programar post|Agendar post|Schedule post/i }).last();
-    if (!(await option.count())) throw new Error('FACEBOOK_SCHEDULE_OPTION_NOT_FOUND');
-    await option.click({ timeout: 10000 });
+    if (await option.count() && await option.isVisible().catch(() => false)) {
+      await option.click({ timeout: 10000 });
+    } else {
+      const textOption = page.getByText(/Programar post|Agendar post|Schedule post/i).last();
+      if (!(await textOption.count()) || !(await textOption.isVisible().catch(() => false))) {
+        throw new Error('FACEBOOK_SCHEDULE_OPTION_NOT_FOUND');
+      }
+      await textOption.click({ timeout: 10000 });
+    }
     await page.waitForTimeout(700);
   }
 
   private async selectDate(page: Page, isoDate: string): Promise<void> {
-    const [year, month, day] = isoDate.split('-').map(Number);
-    if (!year || !month || !day) throw new Error('FACEBOOK_DATE_FIELD_NOT_FOUND');
-    const picker = page.getByRole('button', { name: /Abrir seletor de data|Open date picker/i }).last();
-    if (!(await picker.count())) throw new Error('FACEBOOK_DATE_FIELD_NOT_FOUND');
-    await picker.click({ timeout: 10000 });
-    const target = new Date(year, month - 1, day);
-    const monthName = new Intl.DateTimeFormat('pt-BR', { month: 'long' }).format(target).toLowerCase();
-    for (const cell of await page.getByRole('gridcell').all()) {
-      const label = ((await cell.getAttribute('aria-label')) || (await cell.innerText().catch(() => ''))).toLowerCase();
-      if (label.includes(String(day)) && label.includes(String(year)) && label.includes(monthName) && !(await cell.isDisabled().catch(() => false))) { await cell.click({ timeout: 10000 }); return; }
+    if (!/^\\d{4}-\\d{2}-\\d{2}$/.test(isoDate)) throw new Error('FACEBOOK_DATE_FIELD_NOT_FOUND');
+    // Canonical map observed an input[type="date"]; use the native field first.
+    const field = page.locator('input[type="date"]').last();
+    if (!(await field.count()) || !(await field.isVisible().catch(() => false))) {
+      throw new Error('FACEBOOK_DATE_FIELD_NOT_FOUND');
     }
-    throw new Error('FACEBOOK_DATE_OPTION_NOT_FOUND');
+    await field.fill(isoDate);
+    await field.press('Tab').catch(() => undefined);
   }
 
   private async selectTime(page: Page, time: string): Promise<void> {
-    const picker = page.getByRole('button', { name: /Abrir seletor de hora|Open time picker/i }).last();
-    if (!(await picker.count())) throw new Error('FACEBOOK_TIME_FIELD_NOT_FOUND');
-    await picker.click({ timeout: 10000 });
-    const option = page.getByRole('option', { name: time, exact: true }).last();
-    if (!(await option.count())) throw new Error('FACEBOOK_TIME_OPTION_NOT_FOUND');
-    await option.click({ timeout: 10000 });
+    if (!/^\\d{2}:\\d{2}$/.test(time)) throw new Error('FACEBOOK_TIME_FIELD_NOT_FOUND');
+    // Canonical map observed an input[type="time"]; use the native field first.
+    const field = page.locator('input[type="time"]').last();
+    if (!(await field.count()) || !(await field.isVisible().catch(() => false))) {
+      throw new Error('FACEBOOK_TIME_FIELD_NOT_FOUND');
+    }
+    await field.fill(time);
+    await field.press('Tab').catch(() => undefined);
   }
 
   private async confirmSchedule(page: Page): Promise<void> {
