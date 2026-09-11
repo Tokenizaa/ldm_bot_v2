@@ -1,6 +1,6 @@
 import { Page } from 'playwright';
 import { Product } from '../types.js';
-import { FacebookService } from './FacebookService.js';
+import { FacebookService, facebookService } from './FacebookService.js';
 import { storage } from './StorageService.js';
 import { logger } from './LoggerService.js';
 
@@ -116,6 +116,4 @@ export class FacebookPublisherService {
   }
 }
 
-export const facebookPublisher = new FacebookPublisherService(
-  (await import('./FacebookService.js')).facebookService
-);
+export const facebookPublisher = new FacebookPublisherService(facebookService);
