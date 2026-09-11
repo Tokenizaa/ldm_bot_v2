@@ -91,9 +91,15 @@ export class StorageService {
         lowest_price: Math.min(existing.lowest_price ?? product.current_price, product.current_price),
         monitored: product.active, last_checked_at: now
       };
-      const { data, error } = await this.supabase.from('affiliate_links').update(updatePayload).eq('id', existing.id).select('*').single();
+      // Do not use .select().single() here. PostgREST can return a single-object
+      // coercion error even though the UPDATE itself is valid. The row is fetched
+      // separately after the mutation, which also makes the write resilient to
+      // representation changes and avoids turning a successful crawler write into 500.
+      const { error } = await this.supabase.from('affiliate_links').update(updatePayload).eq('id', existing.id);
       if (error) throw new Error(`Falha ao atualizar produto em affiliate_links: ${error.message}`);
-      return { product: this.mapRowToProduct(data), isNew: false, priceChanged };
+      const updated = await this.getProductById(existing.id);
+      if (!updated) throw new Error(`Produto atualizado não pôde ser relido em affiliate_links: ${existing.id}`);
+      return { product: updated, isNew: false, priceChanged };
     }
 
     const newId = product.id || crypto.randomUUID();
