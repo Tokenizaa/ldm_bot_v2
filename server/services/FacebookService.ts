@@ -30,7 +30,9 @@ export class FacebookService {
 
   constructor() {
     this.profileDir = path.join(process.cwd(), 'data', 'browser-profiles', 'facebook');
-    if (!fs.existsSync(this.profileDir)) throw new Error('Perfil persistente do Facebook não existe: data/browser-profiles/facebook. NÃO recrie nem apague o perfil automaticamente.');
+    if (!fs.existsSync(this.profileDir)) {
+      throw new Error('Perfil persistente do Facebook não existe: data/browser-profiles/facebook. NÃO recrie nem apague o perfil automaticamente.');
+    }
     this.sessionStatus = {
       connected: false,
       status: 'disconnected',
@@ -39,11 +41,14 @@ export class FacebookService {
     };
   }
 
-  getStatus(): FacebookSessionStatus { return { ...this.sessionStatus }; }
+  getStatus(): FacebookSessionStatus {
+    return { ...this.sessionStatus };
+  }
 
   private async getOrCreateBrowserContext(): Promise<BrowserContext> {
     if (this.browserContext) return this.browserContext;
     if (this.contextPromise) return this.contextPromise;
+
     this.contextPromise = chromium.launchPersistentContext(this.profileDir, {
       channel: process.env.FACEBOOK_BROWSER_CHANNEL || 'chrome',
       headless: process.env.FACEBOOK_HEADLESS === 'true',
@@ -61,6 +66,7 @@ export class FacebookService {
       this.contextPromise = null;
       throw error;
     });
+
     return this.contextPromise;
   }
 
@@ -72,17 +78,16 @@ export class FacebookService {
     try {
       if (/\/login|\/checkpoint|\/recover/i.test(page.url())) return false;
 
-      // O indicador primário da sessão é o cookie persistente do próprio Facebook.
-      // Não dependemos de textos/aria-labels que mudam com frequência na UI.
       const cookies = await page.context().cookies('https://www.facebook.com');
       const hasSessionCookies =
-        cookies.some(c => c.name === 'c_user' && !!c.value) &&
-        cookies.some(c => c.name === 'xs' && !!c.value);
+        cookies.some(cookie => cookie.name === 'c_user' && !!cookie.value) &&
+        cookies.some(cookie => cookie.name === 'xs' && !!cookie.value);
 
       if (hasSessionCookies) return true;
 
-      // Fallback visual somente quando os cookies não forem suficientes.
-      const loginForm = await page.locator('input[name="email"], input[name="pass"], form[action*="login"]').count();
+      const loginForm = await page.locator(
+        'input[name="email"], input[name="pass"], form[action*="login"]'
+      ).count();
       if (loginForm > 0) return false;
 
       return await page.locator(
@@ -108,14 +113,33 @@ export class FacebookService {
       const page = await this.getWorkingPage(context);
       const targetUrl = process.env.FACEBOOK_GROUP_URL || 'https://www.facebook.com/groups/tokeniza/';
       await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+
       if (!(await this.checkPageLoginStatus(page))) {
-        this.sessionStatus = { ...this.sessionStatus, connected: false, status: 'requires_reauth', details: 'Facebook solicita autenticação manual.' };
+        this.sessionStatus = {
+          ...this.sessionStatus,
+          connected: false,
+          status: 'requires_reauth',
+          details: 'Facebook solicita autenticação manual.'
+        };
         return false;
       }
-      this.sessionStatus = { ...this.sessionStatus, connected: true, status: 'connected', connected_user: 'Conta Facebook autenticada', last_authenticated_at: new Date().toISOString(), details: 'Sessão ativa no perfil persistente.' };
+
+      this.sessionStatus = {
+        ...this.sessionStatus,
+        connected: true,
+        status: 'connected',
+        connected_user: 'Conta Facebook autenticada',
+        last_authenticated_at: new Date().toISOString(),
+        details: 'Sessão ativa no perfil persistente.'
+      };
       return true;
     } catch (error: any) {
-      this.sessionStatus = { ...this.sessionStatus, connected: false, status: 'requires_reauth', details: error.message };
+      this.sessionStatus = {
+        ...this.sessionStatus,
+        connected: false,
+        status: 'requires_reauth',
+        details: error.message
+      };
       logger.facebook(`Falha ao validar sessão: ${error.message}`, 'error');
       return false;
     }
@@ -124,7 +148,11 @@ export class FacebookService {
   async connectSession(): Promise<{ success: boolean; message: string; connectedUser?: string }> {
     if (this.connectPromise) return this.connectPromise;
     this.connectPromise = this.connectSessionInternal();
-    try { return await this.connectPromise; } finally { this.connectPromise = null; }
+    try {
+      return await this.connectPromise;
+    } finally {
+      this.connectPromise = null;
+    }
   }
 
   private async connectSessionInternal(): Promise<{ success: boolean; message: string; connectedUser?: string }> {
@@ -132,49 +160,112 @@ export class FacebookService {
       const context = await this.getOrCreateBrowserContext();
       const page = await this.getWorkingPage(context);
       await page.goto('https://www.facebook.com', { waitUntil: 'domcontentloaded', timeout: 30000 });
+
       if (await this.checkPageLoginStatus(page)) {
-        this.sessionStatus = { ...this.sessionStatus, connected: true, status: 'connected', connected_user: 'Conta Facebook autenticada', last_authenticated_at: new Date().toISOString() };
-        return { success: true, message: 'Facebook já está autenticado no perfil persistente.', connectedUser: this.sessionStatus.connected_user };
+        this.sessionStatus = {
+          ...this.sessionStatus,
+          connected: true,
+          status: 'connected',
+          connected_user: 'Conta Facebook autenticada',
+          last_authenticated_at: new Date().toISOString()
+        };
+        return {
+          success: true,
+          message: 'Facebook já está autenticado no perfil persistente.',
+          connectedUser: this.sessionStatus.connected_user
+        };
       }
-      if (process.env.FACEBOOK_HEADLESS === 'true') return { success: false, message: 'FACEBOOK_HEADLESS=true impede autenticação manual.' };
-      this.sessionStatus = { ...this.sessionStatus, connected: false, status: 'connecting', details: 'Aguardando login e 2FA manuais.' };
-      if (!(await this.waitForManualAuthentication(page))) return { success: false, message: 'Tempo limite aguardando autenticação manual.' };
-      this.sessionStatus = { ...this.sessionStatus, connected: true, status: 'connected', connected_user: 'Conta Facebook autenticada', last_authenticated_at: new Date().toISOString(), details: 'Login e 2FA concluídos no perfil persistente.' };
-      return { success: true, message: 'Login manual concluído. Perfil persistente mantido aberto.', connectedUser: this.sessionStatus.connected_user };
+
+      if (process.env.FACEBOOK_HEADLESS === 'true') {
+        return { success: false, message: 'FACEBOOK_HEADLESS=true impede autenticação manual.' };
+      }
+
+      this.sessionStatus = {
+        ...this.sessionStatus,
+        connected: false,
+        status: 'connecting',
+        details: 'Aguardando login e 2FA manuais.'
+      };
+
+      if (!(await this.waitForManualAuthentication(page))) {
+        return { success: false, message: 'Tempo limite aguardando autenticação manual.' };
+      }
+
+      this.sessionStatus = {
+        ...this.sessionStatus,
+        connected: true,
+        status: 'connected',
+        connected_user: 'Conta Facebook autenticada',
+        last_authenticated_at: new Date().toISOString(),
+        details: 'Login e 2FA concluídos no perfil persistente.'
+      };
+      return {
+        success: true,
+        message: 'Login manual concluído. Perfil persistente mantido aberto.',
+        connectedUser: this.sessionStatus.connected_user
+      };
     } catch (error: any) {
       logger.facebook(`Erro no navegador Facebook: ${error.message}`, 'error');
       return { success: false, message: error.message };
     }
   }
 
-  async verifySessionWithBrowser(): Promise<boolean> { return this.ensureFacebookSession(); }
+  async verifySessionWithBrowser(): Promise<boolean> {
+    return this.ensureFacebookSession();
+  }
 
   async verifyGroupAccess(groupUrl: string): Promise<{ accessible: boolean; message: string }> {
-    if (!groupUrl || !groupUrl.includes('/groups/')) return { accessible: false, message: 'URL de grupo inválida.' };
-    if (!(await this.ensureFacebookSession())) return { accessible: false, message: 'Sessão do Facebook não autenticada.' };
+    if (!groupUrl || !groupUrl.includes('/groups/')) {
+      return { accessible: false, message: 'URL de grupo inválida.' };
+    }
+    if (!(await this.ensureFacebookSession())) {
+      return { accessible: false, message: 'Sessão do Facebook não autenticada.' };
+    }
+
     try {
       const page = await this.getWorkingPage(await this.getOrCreateBrowserContext());
       await page.goto(groupUrl, { waitUntil: 'domcontentloaded', timeout: 35000 });
       await page.waitForTimeout(1500);
-      const blocked = /conteúdo não está disponível|página não encontrada|link pode estar corrompido/i.test(await page.content());
-      const composer = await page.locator('[role="button"]:has-text("Escreva algo"), [aria-label*="Criar uma publicação"], [aria-label*="Escreva algo"]').count();
+
+      const html = await page.content();
+      const blocked = /conteúdo não está disponível|página não encontrada|link pode estar corrompido/i.test(html);
+      const composer = await page.locator(
+        '[role="button"]:has-text("Escreva algo"), [aria-label*="Criar uma publicação"], [aria-label*="Escreva algo"]'
+      ).count();
       const accessible = !blocked && page.url().includes('/groups/') && composer > 0;
+
       this.sessionStatus.configured_group_url = groupUrl;
       this.sessionStatus.group_accessible = accessible;
-      return accessible ? { accessible: true, message: 'Grupo acessível e composer detectado.' } : { accessible: false, message: 'Grupo não pôde ser validado para publicação.' };
-    } catch (error: any) { return { accessible: false, message: error.message }; }
+      return accessible
+        ? { accessible: true, message: 'Grupo acessível e composer detectado.' }
+        : { accessible: false, message: 'Grupo não pôde ser validado para publicação.' };
+    } catch (error: any) {
+      return { accessible: false, message: error.message };
+    }
+  }
+
+  async publishTest(groupUrl: string): Promise<{ success: boolean; message: string }> {
+    const result = await this.verifyGroupAccess(groupUrl);
+    return { success: result.accessible, message: result.message };
   }
 
   private async openComposer(page: Page): Promise<boolean> {
-    const trigger = page.locator('[role="button"]:has-text("Escreva algo"), [role="button"]:has-text("No que você está pensando"), [aria-label*="Criar uma publicação"], [aria-label*="Escreva algo"]').first();
+    const trigger = page.locator(
+      '[role="button"]:has-text("Escreva algo"), [role="button"]:has-text("No que você está pensando"), [aria-label*="Criar uma publicação"], [aria-label*="Escreva algo"]'
+    ).first();
     if (!(await trigger.count())) return false;
+
     await trigger.click({ timeout: 10000 });
     await page.locator('[role="dialog"]').waitFor({ state: 'visible', timeout: 10000 }).catch(() => undefined);
-    return await page.locator('[role="dialog"] [role="textbox"], [role="dialog"] [contenteditable="true"], [role="textbox"][contenteditable="true"]').count() > 0;
+    return await page.locator(
+      '[role="dialog"] [role="textbox"], [role="dialog"] [contenteditable="true"], [role="textbox"][contenteditable="true"]'
+    ).count() > 0;
   }
 
   private async fillComposer(page: Page, content: string): Promise<boolean> {
-    const textbox = page.locator('[role="dialog"] [role="textbox"], [role="dialog"] [contenteditable="true"], [role="textbox"][contenteditable="true"]').first();
+    const textbox = page.locator(
+      '[role="dialog"] [role="textbox"], [role="dialog"] [contenteditable="true"], [role="textbox"][contenteditable="true"]'
+    ).first();
     if (!(await textbox.count())) return false;
     await textbox.fill(content);
     return true;
@@ -182,10 +273,12 @@ export class FacebookService {
 
   private async openScheduling(page: Page): Promise<boolean> {
     const dialog = page.locator('[role="dialog"]').last();
-    const more = dialog.locator('button[aria-label="Mais opções de post"], button[aria-label*="Mais opções"], button[aria-label*="More options"]').first();
+    const more = dialog.locator(
+      'button[aria-label="Mais opções de post"], button[aria-label*="Mais opções"], button[aria-label*="More options"]'
+    ).first();
     if (!(await more.count())) return false;
-    await more.click({ timeout: 10000 });
 
+    await more.click({ timeout: 10000 });
     const option = page.getByRole('menuitem', { name: /Programar post|Agendar post/i }).first();
     if (!(await option.count())) return false;
     await option.click({ timeout: 10000 });
@@ -196,24 +289,28 @@ export class FacebookService {
 
   private async selectFacebookDate(page: Page, date: string): Promise<boolean> {
     const [year, month, day] = date.split('-').map(Number);
+    if (!year || !month || !day) return false;
+
     const picker = page.getByRole('button', { name: 'Abrir seletor de data' }).last();
     if (!(await picker.count())) return false;
     await picker.click({ timeout: 10000 });
 
     const target = new Date(year, month - 1, day);
-    const label = new Intl.DateTimeFormat('pt-BR', {
+    const normalizedTarget = new Intl.DateTimeFormat('pt-BR', {
       weekday: 'long', day: 'numeric', month: 'long', year: 'numeric'
-    }).format(target);
+    }).format(target).toLowerCase();
 
     const cells = await page.getByRole('gridcell').all();
     for (const cell of cells) {
-      const name = ((await cell.getAttribute('aria-label')) || (await cell.innerText().catch(() => ''))).toLowerCase();
-      const normalized = label.toLowerCase();
-      if (name.includes(normalized) || (name.includes(String(day)) && name.includes(String(year)))) {
-        if (!(await cell.isDisabled().catch(() => false))) {
-          await cell.click({ timeout: 10000 });
-          return true;
-        }
+      const name = ((await cell.getAttribute('aria-label')) || (await cell.innerText().catch(() => ''))).trim().toLowerCase();
+      if (!name) continue;
+      const exact = name === normalizedTarget || name.includes(normalizedTarget);
+      const sameDate = name.includes(String(day)) && name.includes(String(year)) && name.includes(
+        new Intl.DateTimeFormat('pt-BR', { month: 'long' }).format(target).toLowerCase()
+      );
+      if ((exact || sameDate) && !(await cell.isDisabled().catch(() => false))) {
+        await cell.click({ timeout: 10000 });
+        return true;
       }
     }
     return false;
@@ -224,13 +321,28 @@ export class FacebookService {
     if (!(await picker.count())) return false;
     await picker.click({ timeout: 10000 });
 
-    const option = page.getByRole('option', { name: time, exact: true }).first();
-    if (await option.count()) {
-      await option.click({ timeout: 10000 });
+    const exact = page.getByRole('option', { name: time, exact: true }).first();
+    if (await exact.count()) {
+      await exact.click({ timeout: 10000 });
       return true;
     }
 
-    const fallback = page.locator('[role="option"]').filter({ hasText: new RegExp('^\\s*' + time.replace(':', '\\:') + '\\s*
+    const escaped = time.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const fallback = page.locator('[role="option"]').filter({ hasText: new RegExp(`^\\s*${escaped}\\s*$`) }).first();
+    if (!(await fallback.count())) return false;
+    await fallback.click({ timeout: 10000 });
+    return true;
+  }
+
+  private async clickScheduleButton(page: Page): Promise<boolean> {
+    const dialog = page.locator('[role="dialog"]').last();
+    const button = dialog.getByRole('button', { name: /^(Programar|Agendar)$/i }).last();
+    if (!(await button.count())) return false;
+    if (await button.isDisabled().catch(() => false)) return false;
+    if ((await button.getAttribute('aria-disabled')) === 'true') return false;
+    await button.click({ timeout: 10000 });
+    return true;
+  }
 
   async publishScheduledPublication(input: ScheduledPublicationInput): Promise<ScheduledPublicationResult> {
     if (!input.groupUrl?.includes('/groups/')) return { success: false, error: 'FACEBOOK_GROUP_ACCESS_FAILED: URL de grupo inválida.' };
@@ -239,8 +351,13 @@ export class FacebookService {
     if (!input.content.includes(input.affiliateUrl) || !input.content.includes('/20889')) return { success: false, error: 'FACEBOOK_AFFILIATE_URL_INVALID: link afiliado não está no conteúdo.' };
     if (!/^\d{4}-\d{2}-\d{2}$/.test(input.scheduledDate)) return { success: false, error: 'FACEBOOK_DATE_FIELD_NOT_FOUND: data deve ser YYYY-MM-DD.' };
     if (!/^\d{2}:\d{2}$/.test(input.scheduledTime)) return { success: false, error: 'FACEBOOK_TIME_FIELD_NOT_FOUND: hora deve ser HH:mm.' };
+
     const scheduled = new Date(`${input.scheduledDate}T${input.scheduledTime}:00`);
-    if (Number.isNaN(scheduled.getTime()) || scheduled.getHours() !== Number(input.scheduledTime.slice(0, 2)) || scheduled.getMinutes() !== Number(input.scheduledTime.slice(3))) return { success: false, error: 'FACEBOOK_DATE_FIELD_NOT_FOUND: data/hora inválidas.' };
+    const hour = Number(input.scheduledTime.slice(0, 2));
+    const minute = Number(input.scheduledTime.slice(3));
+    if (Number.isNaN(scheduled.getTime()) || scheduled.getHours() !== hour || scheduled.getMinutes() !== minute) {
+      return { success: false, error: 'FACEBOOK_DATE_FIELD_NOT_FOUND: data/hora inválidas.' };
+    }
     if (scheduled.getTime() <= Date.now()) return { success: false, error: 'FACEBOOK_SCHEDULE_IN_PAST' };
 
     if (!(await this.ensureFacebookSession())) return { success: false, error: 'FACEBOOK_REAUTH_REQUIRED' };
@@ -255,28 +372,22 @@ export class FacebookService {
       if (!(await this.fillComposer(page, input.content))) return { success: false, error: 'FACEBOOK_CONTENT_FIELD_NOT_FOUND' };
       await page.waitForTimeout(2500);
       if (!(await this.openScheduling(page))) return { success: false, error: 'FACEBOOK_SCHEDULING_UNAVAILABLE' };
-
-      if (!(await this.selectFacebookDate(page, input.scheduledDate))) {
-        return { success: false, error: 'FACEBOOK_DATE_FIELD_NOT_FOUND' };
-      }
-      if (!(await this.selectFacebookTime(page, input.scheduledTime))) {
-        return { success: false, error: 'FACEBOOK_TIME_FIELD_NOT_FOUND' };
-      }
+      if (!(await this.selectFacebookDate(page, input.scheduledDate))) return { success: false, error: 'FACEBOOK_DATE_FIELD_NOT_FOUND' };
+      if (!(await this.selectFacebookTime(page, input.scheduledTime))) return { success: false, error: 'FACEBOOK_TIME_FIELD_NOT_FOUND' };
       await page.waitForTimeout(500);
 
-      const scheduleButton = page.locator('[role="dialog"] [aria-label*="Programar"], [role="dialog"] [aria-label*="Agendar"], [role="button"]:has-text("Programar"), [role="button"]:has-text("Agendar")').last();
-      if (!(await scheduleButton.count())) return { success: false, error: 'FACEBOOK_SCHEDULE_BUTTON_NOT_FOUND' };
-      if (await scheduleButton.isDisabled().catch(() => false) || (await scheduleButton.getAttribute('aria-disabled')) === 'true') return { success: false, error: 'FACEBOOK_SCHEDULE_BUTTON_DISABLED' };
-
-      await scheduleButton.click({ timeout: 10000 });
+      if (!(await this.clickScheduleButton(page))) return { success: false, error: 'FACEBOOK_SCHEDULE_BUTTON_DISABLED' };
       await page.waitForTimeout(2500);
 
-      const successText = page.locator('text=/agendad|programad|scheduled/i').first();
-      const dialogStillOpen = await page.locator('[role="dialog"]').count();
-      const successVisible = await successText.isVisible().catch(() => false);
-      if (!successVisible && dialogStillOpen > 0) {
-        const remainingText = (await page.locator('[role="dialog"]').innerText().catch(() => '')).toLowerCase();
-        if (!/agendad|programad|scheduled|postado|publicado/.test(remainingText)) return { success: false, error: 'FACEBOOK_SCHEDULE_CONFIRMATION_FAILED' };
+      const dialog = page.locator('[role="dialog"]').last();
+      const confirmation = page.getByText(/agendad|programad|scheduled/i).first();
+      const confirmedByText = await confirmation.isVisible().catch(() => false);
+      const dialogVisible = await dialog.isVisible().catch(() => false);
+      if (!confirmedByText && dialogVisible) {
+        const text = (await dialog.innerText().catch(() => '')).toLowerCase();
+        if (!/agendad|programad|scheduled|postado|publicado/.test(text)) {
+          return { success: false, error: 'FACEBOOK_SCHEDULE_CONFIRMATION_FAILED' };
+        }
       }
 
       const scheduledAt = scheduled.toISOString();
@@ -291,157 +402,35 @@ export class FacebookService {
   async publishSingle(publication: Publication): Promise<{ success: boolean; postUrl?: string; error?: string }> {
     if (!(await this.ensureFacebookSession())) return { success: false, error: 'Facebook requer autenticação.' };
     if (!publication.content?.includes('/20889')) return { success: false, error: 'Publicação bloqueada: link afiliado /20889 ausente.' };
+
     const settings = await storage.getSettings();
     const targetGroupUrl = publication.facebook_group_url || settings.facebook_group_url;
     const group = await this.verifyGroupAccess(targetGroupUrl);
     if (!group.accessible) return { success: false, error: group.message };
+
     try {
       const page = await this.getWorkingPage(await this.getOrCreateBrowserContext());
       await page.goto(targetGroupUrl, { waitUntil: 'domcontentloaded', timeout: 35000 });
-      await page.waitForTimeout(1500);
-      if (!(await this.openComposer(page))) return { success: false, error: 'Composer real do grupo não foi encontrado.' };
-      if (!(await this.fillComposer(page, publication.content))) return { success: false, error: 'Campo de conteúdo não encontrado.' };
-      const submit = page.locator('[role="dialog"] [aria-label="Publicar"], [role="dialog"] [aria-label="Postar"], [role="button"]:has-text("Publicar"), [role="button"]:has-text("Postar")').first();
-      if (!(await submit.count())) return { success: false, error: 'Botão real de publicação não foi encontrado.' };
-      await submit.click();
-      const confirmed = await page.locator('[role="dialog"]').waitFor({ state: 'hidden', timeout: 15000 }).then(() => true).catch(() => false);
-      return confirmed ? { success: true } : { success: false, error: 'Publicação não foi confirmada pelo Facebook.' };
-    } catch (error: any) { return { success: false, error: error.message }; }
-  }
-
-  async publishBatch(publications: Publication[]): Promise<{ results: Array<{ id: string; success: boolean; postUrl?: string; error?: string }> }> {
-    const results: Array<{ id: string; success: boolean; postUrl?: string; error?: string }> = [];
-    if (!(await this.ensureFacebookSession())) return { results: publications.map(p => ({ id: p.id, success: false, error: 'Facebook requer autenticação.' })) };
-    for (const publication of publications) results.push({ id: publication.id, ...(await this.publishSingle(publication)) });
-    return { results };
-  }
-
-  async publishTest(groupUrl: string): Promise<{ success: boolean; postUrl?: string; error?: string }> {
-    if (!groupUrl) return { success: false, error: 'Grupo não configurado.' };
-    if (!(await this.ensureFacebookSession())) return { success: false, error: 'Facebook requer autenticação.' };
-    const page = await this.getWorkingPage(await this.getOrCreateBrowserContext());
-    await page.goto(groupUrl, { waitUntil: 'domcontentloaded', timeout: 35000 });
-    if (!(await this.openComposer(page))) return { success: false, error: 'Composer não encontrado.' };
-    const content = 'FORGEDEALS — TESTE DE CONEXÃO\n\nEsta é uma publicação de teste solicitada pelo operador. Não representa uma oferta comercial.';
-    if (!(await this.fillComposer(page, content))) return { success: false, error: 'Campo de conteúdo não encontrado.' };
-    const submit = page.locator('[role="dialog"] [aria-label="Publicar"], [role="dialog"] [aria-label="Postar"], [role="button"]:has-text("Publicar"), [role="button"]:has-text("Postar")').first();
-    if (!(await submit.count())) return { success: false, error: 'Botão de publicação não encontrado.' };
-    await submit.click();
-    const confirmed = await page.locator('[role="dialog"]').waitFor({ state: 'hidden', timeout: 15000 }).then(() => true).catch(() => false);
-    return confirmed ? { success: true } : { success: false, error: 'Teste não confirmado pelo Facebook.' };
-  }
-}
-
-export const facebookService = new FacebookService();
-) }).first();
-    if (await fallback.count()) {
-      await fallback.click({ timeout: 10000 });
-      return true;
-    }
-    return false;
-  }
-
-  async publishScheduledPublication(input: ScheduledPublicationInput): Promise<ScheduledPublicationResult> {
-    if (!input.groupUrl?.includes('/groups/')) return { success: false, error: 'FACEBOOK_GROUP_ACCESS_FAILED: URL de grupo inválida.' };
-    if (!input.content?.trim()) return { success: false, error: 'FACEBOOK_CONTENT_FIELD_NOT_FOUND: conteúdo vazio.' };
-    if (!input.affiliateUrl || !/^https?:\/\//i.test(input.affiliateUrl) || !input.affiliateUrl.includes('/20889')) return { success: false, error: 'FACEBOOK_AFFILIATE_URL_INVALID' };
-    if (!input.content.includes(input.affiliateUrl) || !input.content.includes('/20889')) return { success: false, error: 'FACEBOOK_AFFILIATE_URL_INVALID: link afiliado não está no conteúdo.' };
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(input.scheduledDate)) return { success: false, error: 'FACEBOOK_DATE_FIELD_NOT_FOUND: data deve ser YYYY-MM-DD.' };
-    if (!/^\d{2}:\d{2}$/.test(input.scheduledTime)) return { success: false, error: 'FACEBOOK_TIME_FIELD_NOT_FOUND: hora deve ser HH:mm.' };
-    const scheduled = new Date(`${input.scheduledDate}T${input.scheduledTime}:00`);
-    if (Number.isNaN(scheduled.getTime()) || scheduled.getHours() !== Number(input.scheduledTime.slice(0, 2)) || scheduled.getMinutes() !== Number(input.scheduledTime.slice(3))) return { success: false, error: 'FACEBOOK_DATE_FIELD_NOT_FOUND: data/hora inválidas.' };
-    if (scheduled.getTime() <= Date.now()) return { success: false, error: 'FACEBOOK_SCHEDULE_IN_PAST' };
-
-    if (!(await this.ensureFacebookSession())) return { success: false, error: 'FACEBOOK_REAUTH_REQUIRED' };
-    const group = await this.verifyGroupAccess(input.groupUrl);
-    if (!group.accessible) return { success: false, error: `FACEBOOK_GROUP_ACCESS_FAILED: ${group.message}` };
-
-    try {
-      const page = await this.getWorkingPage(await this.getOrCreateBrowserContext());
-      await page.goto(input.groupUrl, { waitUntil: 'domcontentloaded', timeout: 35000 });
       await page.waitForTimeout(1500);
       if (!(await this.openComposer(page))) return { success: false, error: 'FACEBOOK_COMPOSER_NOT_FOUND' };
-      if (!(await this.fillComposer(page, input.content))) return { success: false, error: 'FACEBOOK_CONTENT_FIELD_NOT_FOUND' };
-      await page.waitForTimeout(2500);
-      if (!(await this.openScheduling(page))) return { success: false, error: 'FACEBOOK_SCHEDULING_UNAVAILABLE' };
+      if (!(await this.fillComposer(page, publication.content))) return { success: false, error: 'FACEBOOK_CONTENT_FIELD_NOT_FOUND' };
+      await page.waitForTimeout(2000);
 
-      const dateInput = page.locator('input[type="date"]').first();
-      const timeInput = page.locator('input[type="time"]').first();
-      if (!(await dateInput.count())) return { success: false, error: 'FACEBOOK_DATE_FIELD_NOT_FOUND' };
-      if (!(await timeInput.count())) return { success: false, error: 'FACEBOOK_TIME_FIELD_NOT_FOUND' };
-      await dateInput.fill(input.scheduledDate);
-      await timeInput.fill(input.scheduledTime);
-      await page.waitForTimeout(500);
+      const dialog = page.locator('[role="dialog"]').last();
+      const publishButton = dialog.getByRole('button', { name: /^(Publicar|Postar)$/i }).last();
+      if (!(await publishButton.count())) return { success: false, error: 'FACEBOOK_PUBLISH_BUTTON_NOT_FOUND' };
+      if (await publishButton.isDisabled().catch(() => false)) return { success: false, error: 'FACEBOOK_PUBLISH_BUTTON_DISABLED' };
 
-      const actualDate = await dateInput.inputValue();
-      const actualTime = await timeInput.inputValue();
-      if (actualDate !== input.scheduledDate || actualTime !== input.scheduledTime) return { success: false, error: 'FACEBOOK_SCHEDULE_FIELDS_NOT_APPLIED' };
-
-      const scheduleButton = page.locator('[role="dialog"] [aria-label*="Programar"], [role="dialog"] [aria-label*="Agendar"], [role="button"]:has-text("Programar"), [role="button"]:has-text("Agendar")').last();
-      if (!(await scheduleButton.count())) return { success: false, error: 'FACEBOOK_SCHEDULE_BUTTON_NOT_FOUND' };
-      if (await scheduleButton.isDisabled().catch(() => false) || (await scheduleButton.getAttribute('aria-disabled')) === 'true') return { success: false, error: 'FACEBOOK_SCHEDULE_BUTTON_DISABLED' };
-
-      await scheduleButton.click({ timeout: 10000 });
+      await publishButton.click({ timeout: 10000 });
       await page.waitForTimeout(2500);
 
-      const successText = page.locator('text=/agendad|programad|scheduled/i').first();
-      const dialogStillOpen = await page.locator('[role="dialog"]').count();
-      const successVisible = await successText.isVisible().catch(() => false);
-      if (!successVisible && dialogStillOpen > 0) {
-        const remainingText = (await page.locator('[role="dialog"]').innerText().catch(() => '')).toLowerCase();
-        if (!/agendad|programad|scheduled|postado|publicado/.test(remainingText)) return { success: false, error: 'FACEBOOK_SCHEDULE_CONFIRMATION_FAILED' };
-      }
-
-      const scheduledAt = scheduled.toISOString();
-      logger.facebook(`Publicação agendada no Facebook para ${scheduledAt}.`);
-      return { success: true, scheduledAt };
+      const postLink = page.locator('a[href*="/posts/"], a[href*="/permalink/"]').first();
+      const postUrl = await postLink.getAttribute('href').catch(() => null);
+      return { success: true, postUrl: postUrl || undefined };
     } catch (error: any) {
-      logger.facebook(`Falha no agendamento Facebook: ${error.message}`, 'error');
+      logger.facebook(`Falha na publicação Facebook: ${error.message}`, 'error');
       return { success: false, error: error.message };
     }
-  }
-
-  async publishSingle(publication: Publication): Promise<{ success: boolean; postUrl?: string; error?: string }> {
-    if (!(await this.ensureFacebookSession())) return { success: false, error: 'Facebook requer autenticação.' };
-    if (!publication.content?.includes('/20889')) return { success: false, error: 'Publicação bloqueada: link afiliado /20889 ausente.' };
-    const settings = await storage.getSettings();
-    const targetGroupUrl = publication.facebook_group_url || settings.facebook_group_url;
-    const group = await this.verifyGroupAccess(targetGroupUrl);
-    if (!group.accessible) return { success: false, error: group.message };
-    try {
-      const page = await this.getWorkingPage(await this.getOrCreateBrowserContext());
-      await page.goto(targetGroupUrl, { waitUntil: 'domcontentloaded', timeout: 35000 });
-      await page.waitForTimeout(1500);
-      if (!(await this.openComposer(page))) return { success: false, error: 'Composer real do grupo não foi encontrado.' };
-      if (!(await this.fillComposer(page, publication.content))) return { success: false, error: 'Campo de conteúdo não encontrado.' };
-      const submit = page.locator('[role="dialog"] [aria-label="Publicar"], [role="dialog"] [aria-label="Postar"], [role="button"]:has-text("Publicar"), [role="button"]:has-text("Postar")').first();
-      if (!(await submit.count())) return { success: false, error: 'Botão real de publicação não foi encontrado.' };
-      await submit.click();
-      const confirmed = await page.locator('[role="dialog"]').waitFor({ state: 'hidden', timeout: 15000 }).then(() => true).catch(() => false);
-      return confirmed ? { success: true } : { success: false, error: 'Publicação não foi confirmada pelo Facebook.' };
-    } catch (error: any) { return { success: false, error: error.message }; }
-  }
-
-  async publishBatch(publications: Publication[]): Promise<{ results: Array<{ id: string; success: boolean; postUrl?: string; error?: string }> }> {
-    const results: Array<{ id: string; success: boolean; postUrl?: string; error?: string }> = [];
-    if (!(await this.ensureFacebookSession())) return { results: publications.map(p => ({ id: p.id, success: false, error: 'Facebook requer autenticação.' })) };
-    for (const publication of publications) results.push({ id: publication.id, ...(await this.publishSingle(publication)) });
-    return { results };
-  }
-
-  async publishTest(groupUrl: string): Promise<{ success: boolean; postUrl?: string; error?: string }> {
-    if (!groupUrl) return { success: false, error: 'Grupo não configurado.' };
-    if (!(await this.ensureFacebookSession())) return { success: false, error: 'Facebook requer autenticação.' };
-    const page = await this.getWorkingPage(await this.getOrCreateBrowserContext());
-    await page.goto(groupUrl, { waitUntil: 'domcontentloaded', timeout: 35000 });
-    if (!(await this.openComposer(page))) return { success: false, error: 'Composer não encontrado.' };
-    const content = 'FORGEDEALS — TESTE DE CONEXÃO\n\nEsta é uma publicação de teste solicitada pelo operador. Não representa uma oferta comercial.';
-    if (!(await this.fillComposer(page, content))) return { success: false, error: 'Campo de conteúdo não encontrado.' };
-    const submit = page.locator('[role="dialog"] [aria-label="Publicar"], [role="dialog"] [aria-label="Postar"], [role="button"]:has-text("Publicar"), [role="button"]:has-text("Postar")').first();
-    if (!(await submit.count())) return { success: false, error: 'Botão de publicação não encontrado.' };
-    await submit.click();
-    const confirmed = await page.locator('[role="dialog"]').waitFor({ state: 'hidden', timeout: 15000 }).then(() => true).catch(() => false);
-    return confirmed ? { success: true } : { success: false, error: 'Teste não confirmado pelo Facebook.' };
   }
 }
 
