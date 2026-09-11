@@ -4,6 +4,7 @@ import { crawler } from '../services/CrawlerService.js';
 import { contentService } from '../services/ContentService.js';
 import { scheduler } from '../services/SchedulerService.js';
 import { facebookService } from '../services/FacebookService.js';
+import { facebookPublisher } from '../services/FacebookPublisherService.js';
 import { nvidiaAI } from '../services/NvidiaAIService.js';
 import { logger } from '../services/LoggerService.js';
 import { authService } from '../services/AuthService.js';
@@ -174,7 +175,7 @@ apiRouter.post('/facebook/verify-group', async (req, res) => {
   catch (err: any) { res.status(500).json({ success: false, error: err.message }); }
 });
 apiRouter.post('/facebook/test-publish', async (req, res) => {
-  try { const settings = await storage.getSettings(); res.json(await facebookService.publishTest(req.body.groupUrl || settings.facebook_group_url)); }
+  try { const settings = await storage.getSettings(); res.json(await facebookPublisher.publishTest(req.body.groupUrl || settings.facebook_group_url)); }
   catch (err: any) { res.status(500).json({ success: false, error: err.message }); }
 });
 
