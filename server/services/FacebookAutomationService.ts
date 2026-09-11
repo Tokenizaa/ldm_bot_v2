@@ -47,6 +47,14 @@ class FacebookAutomationService {
   }
 
   private async goToGroup(page: Page, groupUrl: string) {
+    const current = page.url();
+    if (current.startsWith(groupUrl) && await page.getByRole('button', {
+      name: /Escreva algo|No que você está pensando|Criar uma publicação/i
+    }).count() > 0) {
+      this.log('GROUP_REUSE', 'pagina do grupo já está ativa; sem nova navegação');
+      return;
+    }
+
     this.log('GROUP_NAVIGATION_START', 'url=' + groupUrl);
     await page.goto(groupUrl, { waitUntil: 'commit', timeout: 60000 });
     await page.waitForLoadState('domcontentloaded', { timeout: 30000 }).catch(() => undefined);
