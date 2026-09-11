@@ -46,13 +46,6 @@ export const FacebookTab: React.FC<FacebookTabProps> = ({
   const isConnected = status?.connected && status?.status === 'connected';
   const isRequiresReauth = status?.status === 'requires_reauth';
 
-  const handleManualImport = async () => {
-    if (!sessionInput.trim()) return;
-    await onConnect(sessionInput);
-    setSessionInput('');
-    setShowSessionInput(false);
-  };
-
   const handleVerifyGroup = async () => {
     setVerifyingGroup(true);
     setGroupAccessResult(null);
@@ -137,12 +130,12 @@ export const FacebookTab: React.FC<FacebookTabProps> = ({
 
             <button
               id="fb-connect-btn"
-              onClick={() => setShowSessionInput(true)}
+              onClick={() => onConnect()}
               disabled={isConnecting}
               className="px-4 py-2 text-xs font-semibold rounded-xl bg-amber-500 hover:bg-amber-600 text-slate-950 shadow-xs transition-colors disabled:opacity-50 flex items-center gap-1.5"
             >
-              <Key className="w-3.5 h-3.5" />
-              <span>{isConnecting ? 'Conectando...' : 'Conectar Facebook'}</span>
+              <ExternalLink className="w-3.5 h-3.5" />
+              <span>{isConnecting ? 'Abrindo Facebook...' : 'Conectar Facebook'}</span>
             </button>
 
             <button
@@ -247,60 +240,23 @@ export const FacebookTab: React.FC<FacebookTabProps> = ({
         )}
       </div>
 
-      {/* Manual Connection / Session Injection Modal/Drawer */}
-      {showSessionInput && (
-        <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-amber-500/40 dark:border-amber-500/30 shadow-lg space-y-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2.5">
-              <FolderLock className="w-5 h-5 text-amber-500" />
-              <h3 className="text-sm font-bold text-slate-900 dark:text-white">
-                Conectar Sessão do Facebook
-              </h3>
-            </div>
-            <button
-              onClick={() => setShowSessionInput(false)}
-              className="text-xs text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
-            >
-              Fechar
-            </button>
-          </div>
-
-          <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
-            Para ambientes de container/servidor (Cloud Run, Docker), você pode conectar sua sessão colando seus cookies autenticados (<code className="bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded font-mono text-amber-600">c_user=...; xs=...;</code>) ou o conteúdo JSON de um <code className="bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded font-mono text-amber-600">storageState.json</code> do Playwright.
-          </p>
-
-          <textarea
-            id="fb-session-input-textarea"
-            value={sessionInput}
-            onChange={(e) => setSessionInput(e.target.value)}
-            rows={4}
-            placeholder="Cole aqui: c_user=1000...; xs=38%3A... (ou JSON do storageState)"
-            className="w-full p-3 text-xs font-mono bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500 dark:text-white"
-          />
-
-          <div className="flex items-center justify-between">
-            <div className="text-[11px] text-slate-400">
-              Os cookies são gravados exclusivamente em <code className="font-mono">data/browser-profiles/facebook/storageState.json</code>
-            </div>
-            <div className="flex gap-2">
-              <button
-                onClick={() => setShowSessionInput(false)}
-                className="px-3 py-1.5 text-xs rounded-lg text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
-              >
-                Cancelar
-              </button>
-              <button
-                id="fb-save-session-btn"
-                onClick={handleManualImport}
-                disabled={!sessionInput.trim() || isConnecting}
-                className="px-4 py-1.5 text-xs font-semibold bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-slate-950 rounded-lg shadow-xs"
-              >
-                {isConnecting ? 'Validando...' : 'Salvar e Validar Sessão'}
-              </button>
-            </div>
-          </div>
+      {/* Browser connection information */}
+      <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-amber-500/30 shadow-xs space-y-3">
+        <div className="flex items-center gap-2.5">
+          <ExternalLink className="w-5 h-5 text-amber-500" />
+          <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+            Conexão pelo navegador
+          </h3>
         </div>
-      )}
+        <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+          Clique em <strong>Conectar Facebook</strong> para abrir o Chrome com o perfil persistente do robô.
+          Faça o login normalmente, incluindo senha, código 2FA e qualquer confirmação solicitada pelo Facebook.
+          Depois que o login for concluído, a sessão será detectada automaticamente e preservada para as próximas publicações.
+        </p>
+        <div className="text-[11px] text-slate-400">
+          Perfil persistente: <code className="font-mono">data/browser-profiles/facebook</code>
+        </div>
+      </div>
 
       {/* Architecture & 2FA Information */}
       <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs space-y-4 transition-colors">
