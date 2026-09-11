@@ -48,37 +48,97 @@ export class AuthService {
     }
   }
 
-  async signupFirstAdmin(name: string, email: string, password: string, supabase?: SupabaseClient | null) {
+  private validateAdminCredentials(name: string, email: string, password: string) {
     const cleanName = String(name || '').trim();
     const cleanEmail = String(email || '').trim().toLowerCase();
     const cleanPassword = String(password || '');
 
-    if (!cleanName || !cleanEmail || !cleanPassword) return { success: false, error: 'Nome, e-mail e senha são obrigatórios.' };
-    if (cleanPassword.length < 8) return { success: false, error: 'A senha deve ter pelo menos 8 caracteres.' };
+    if (!cleanName || !cleanEmail || !cleanPassword) {
+      return { success: false as const, error: 'Nome, e-mail e senha são obrigatórios.' };
+    }
+    if (cleanPassword.length < 8) {
+      return { success: false as const, error: 'A senha deve ter pelo menos 8 caracteres.' };
+    }
+
+    return { success: true as const, cleanName, cleanEmail, cleanPassword };
+  }
+
+  async signupFirstAdmin(name: string, email: string, password: string, supabase?: SupabaseClient | null) {
+    const validation = this.validateAdminCredentials(name, email, password);
+    if (!validation.success) return validation;
     if (!supabase) return { success: false, error: 'Supabase Auth não está configurado.' };
 
     try {
       const { data: usersData, error: usersError } = await supabase.auth.admin.listUsers({ page: 1, perPage: 1 });
       if (usersError) throw usersError;
       if ((usersData.users || []).length > 0) {
-        return { success: false, error: 'O cadastro inicial já foi concluído. Use o login.' };
+        return { success: false, error: 'O cadastro inicial já foi concluído. Use a configuração de administrador.' };
       }
 
       const { data, error } = await supabase.auth.admin.createUser({
-        email: cleanEmail,
-        password: cleanPassword,
+        email: validation.cleanEmail,
+        password: validation.cleanPassword,
         email_confirm: true,
-        user_metadata: { name: cleanName }
+        user_metadata: { name: validation.cleanName },
+        app_metadata: { role: 'admin' }
       });
       if (error || !data.user) {
         return { success: false, error: error?.message || 'Não foi possível criar o administrador.' };
       }
 
-      logger.auth(`Administrador inicial criado: ${cleanEmail}`);
-      return this.login(cleanEmail, cleanPassword, supabase);
+      logger.auth(`Administrador inicial criado: ${validation.cleanEmail}`);
+      return this.login(validation.cleanEmail, validation.cleanPassword, supabase);
     } catch (err: any) {
       logger.auth(`Erro no cadastro inicial: ${err.message}`, 'error');
       return { success: false, error: 'Não foi possível criar o administrador inicial.' };
+    }
+  }
+
+  async setupAdmin(name: string, email: string, password: string, setupKey: string, supabase?: SupabaseClient | null) {
+    const validation = this.validateAdminCredentials(name, email, password);
+    if (!validation.success) return validation;
+    if (!supabase) return { success: false, error: 'Supabase Auth não está configurado.' };
+
+    const expectedKey = process.env.ADMIN_SETUP_KEY?.trim();
+    if (!expectedKey || !setupKey || !crypto.timingSafeEqual(Buffer.from(setupKey), Buffer.from(expectedKey))) {
+      return { success: false, error: 'Chave de configuração inválida.' };
+    }
+
+    try {
+      const { data: usersData, error: usersError } = await supabase.auth.admin.listUsers({ page: 1, perPage: 10 });
+      if (usersError) throw usersError;
+
+      const users = usersData.users || [];
+      if (users.length > 1) {
+        return { success: false, error: 'Configuração inicial bloqueada: já existem múltiplos usuários no Auth.' };
+      }
+
+      if (users.length === 0) {
+        const { data, error } = await supabase.auth.admin.createUser({
+          email: validation.cleanEmail,
+          password: validation.cleanPassword,
+          email_confirm: true,
+          user_metadata: { name: validation.cleanName },
+          app_metadata: { role: 'admin' }
+        });
+        if (error || !data.user) return { success: false, error: error?.message || 'Não foi possível criar o administrador.' };
+      } else {
+        const existingUser = users[0];
+        const { data, error } = await supabase.auth.admin.updateUserById(existingUser.id, {
+          email: validation.cleanEmail,
+          password: validation.cleanPassword,
+          email_confirm: true,
+          user_metadata: { ...(existingUser.user_metadata || {}), name: validation.cleanName },
+          app_metadata: { ...(existingUser.app_metadata || {}), role: 'admin' }
+        });
+        if (error || !data.user) return { success: false, error: error?.message || 'Não foi possível atualizar o administrador.' };
+      }
+
+      logger.auth(`Administrador configurado: ${validation.cleanEmail}`);
+      return this.login(validation.cleanEmail, validation.cleanPassword, supabase);
+    } catch (err: any) {
+      logger.auth(`Erro na configuração do administrador: ${err.message}`, 'error');
+      return { success: false, error: 'Não foi possível configurar o administrador.' };
     }
   }
 
