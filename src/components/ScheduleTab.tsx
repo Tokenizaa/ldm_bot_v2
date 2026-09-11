@@ -11,10 +11,12 @@ interface ScheduleTabProps {
   onDelete: (id: string) => void;
   onViewDetails: (pub: Publication) => void;
   onGenerateTodayBatch: () => void;
+  onScheduleAll: () => void;
+  isSchedulingAll: boolean;
   isGeneratingBatch: boolean;
 }
 
-export const ScheduleTab: React.FC<ScheduleTabProps> = ({ publications, onPublishNow, onRetry, onCancel, onReschedule, onDelete, onViewDetails, onGenerateTodayBatch, isGeneratingBatch }) => {
+export const ScheduleTab: React.FC<ScheduleTabProps> = ({ publications, onPublishNow, onRetry, onCancel, onReschedule, onDelete, onViewDetails, onGenerateTodayBatch, onScheduleAll, isSchedulingAll, isGeneratingBatch }) => {
   const [filterStatus, setFilterStatus] = useState('all');
   const [reschedulingId, setReschedulingId] = useState<string | null>(null);
   const [newScheduleTime, setNewScheduleTime] = useState('');
@@ -48,7 +50,7 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({ publications, onPublis
         <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} className="text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-2 focus:ring-amber-500/30">
           <option value="all">Todos os status ({publications.length})</option><option value="scheduled">Agendados</option><option value="published">Publicados</option><option value="failed">Falhas</option><option value="cancelled">Cancelados</option>
         </select>
-        <button id="sched-gen-batch-btn" onClick={onGenerateTodayBatch} disabled={isGeneratingBatch} className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-amber-500 hover:bg-amber-600 text-slate-950 shadow-xs transition-colors disabled:opacity-50"><Sparkles className={`w-3.5 h-3.5 ${isGeneratingBatch ? 'animate-spin' : ''}`} /><span>{isGeneratingBatch ? 'Gerando...' : 'Gerar 5 de Hoje'}</span></button>
+        <button id="sched-program-btn" onClick={onScheduleAll} disabled={isSchedulingAll || isGeneratingBatch} className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-amber-500 hover:bg-amber-600 text-slate-950 shadow-xs transition-colors disabled:opacity-50"><CalendarCheck className={`w-3.5 h-3.5 ${isSchedulingAll ? 'animate-pulse' : ''}`} /><span>{isSchedulingAll ? 'Programando...' : 'Programar'}</span></button>
       </div>
     </div>
 
