@@ -132,8 +132,10 @@ export class StorageService {
     if (status) query = query.eq('status', status);
     const { data, error } = await query;
     if (error) throw new Error(`Falha ao consultar posts no Supabase: ${error.message}`);
-    const posts = data || []; if (!posts.length) return [];
-    const products = await this.getProducts(); const productMap = new Map(products.map(p => [p.id, p]));
+    const posts = data || [];
+    if (!posts.length) return [];
+    const products = await this.getProducts();
+    const productMap = new Map(products.map(p => [p.id, p]));
     return posts.map(row => this.mapRowToPublication(row, productMap.get(row.affiliate_link_id)));
   }
 
@@ -146,5 +148,87 @@ export class StorageService {
   }
 
   async getPublicationsForProduct(productId: string): Promise<Publication[]> {
-    const publications = await this.getPublications(); return publications.filter(p => p.product_id === productId);
+    const publications = await this.getPublications();
+    return publications.filter(p => p.product_id === productId);
   }
+
+  async createPublication(pub: Omit<Publication, 'id' | 'created_at' | 'updated_at'>): Promise<Publication> {
+    if (!pub.content?.includes('/20889')) throw new Error('Publicação recusada: copy sem link afiliado /20889.');
+    const now = new Date().toISOString();
+    const record = {
+      id: crypto.randomUUID(), affiliate_link_id: pub.product_id, scheduled_at: pub.scheduled_at,
+      status: pub.status, content: pub.content, group_id: pub.facebook_group_url || null,
+      created_at: now
+    };
+    const { data, error } = await this.supabase.from('posts').insert(record).select('*').single();
+    if (error) throw new Error(`Falha ao criar publicação: ${error.message}`);
+    return this.mapRowToPublication(data, await this.getProductById(pub.product_id));
+  }
+
+  async updatePublication(id: string, updates: Partial<Publication>): Promise<Publication | undefined> {
+    const clean: Record<string, any> = {};
+    if (updates.scheduled_at !== undefined) clean.scheduled_at = updates.scheduled_at;
+    if (updates.status !== undefined) clean.status = updates.status;
+    if (updates.content !== undefined) clean.content = updates.content;
+    if (updates.facebook_group_url !== undefined) clean.group_id = updates.facebook_group_url;
+    if (updates.facebook_post_url !== undefined) clean.facebook_post_id = updates.facebook_post_url;
+    if (updates.published_at !== undefined) clean.published_at = updates.published_at;
+    if (updates.error_message !== undefined) clean.error_message = updates.error_message;
+    clean.last_attempt_at = new Date().toISOString();
+    const { data, error } = await this.supabase.from('posts').update(clean).eq('id', id).select('*').maybeSingle();
+    if (error) throw new Error(`Falha ao atualizar publicação: ${error.message}`);
+    if (!data) return undefined;
+    return this.mapRowToPublication(data, data.affiliate_link_id ? await this.getProductById(data.affiliate_link_id) : undefined);
+  }
+
+  async deletePublication(id: string): Promise<boolean> {
+    const { error } = await this.supabase.from('posts').delete().eq('id', id);
+    if (error) throw new Error(`Falha ao excluir publicação: ${error.message}`);
+    return true;
+  }
+
+  async getSettings(): Promise<AppSettings> {
+    const { data, error } = await this.supabase.from('system_config').select('config').eq('key', 'app_settings').maybeSingle();
+    if (error) throw new Error(`Falha ao consultar configurações: ${error.message}`);
+    return { ...DEFAULT_SETTINGS, ...((data?.config || {}) as Partial<AppSettings>) };
+  }
+
+  async updateSettings(updates: Partial<AppSettings>): Promise<AppSettings> {
+    const settings = { ...(await this.getSettings()), ...updates };
+    const { error } = await this.supabase.from('system_config').upsert({ key: 'app_settings', config: settings, updated_at: new Date().toISOString() });
+    if (error) throw new Error(`Falha ao salvar configurações: ${error.message}`);
+    return settings;
+  }
+
+  async getQuota(): Promise<OperationalQuota> {
+    const now = new Date();
+    const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const todayDate = now.toISOString().slice(0, 10);
+    const [publications, settings] = await Promise.all([this.getPublications(), this.getSettings()]);
+    const monthly = publications.filter(p => p.status === 'published' && (p.published_at || p.scheduled_at).startsWith(currentMonth)).length;
+    const daily = publications.filter(p => (p.status === 'published' || p.status === 'publishing') && (p.published_at || p.scheduled_at).startsWith(todayDate)).length;
+    return { current_month: currentMonth, monthly_publication_count: monthly, monthly_limit: settings.monthly_limit, daily_publication_count: daily, daily_limit: settings.daily_limit, remaining_month: Math.max(0, settings.monthly_limit - monthly), today_date: todayDate };
+  }
+
+  async getDashboardStats(): Promise<DashboardStats> {
+    const [products, publications, quota] = await Promise.all([this.getProducts(), this.getPublications(), this.getQuota()]);
+    const now = new Date();
+    const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const today = now.toISOString().slice(0, 10);
+    const published = publications.filter(p => p.status === 'published');
+    return {
+      products_found: products.length,
+      products_valid: products.filter(p => Boolean(p.product_name && p.original_url && p.current_price > 0)).length,
+      products_published: published.length,
+      published_today: published.filter(p => (p.published_at || '').startsWith(today)).length,
+      published_this_month: published.filter(p => (p.published_at || p.scheduled_at).startsWith(month)).length,
+      monthly_limit: quota.monthly_limit,
+      daily_limit: quota.daily_limit,
+      remaining_month: quota.remaining_month,
+      failures: publications.filter(p => p.status === 'failed').length,
+      next_publication: publications.find(p => p.status === 'scheduled' && new Date(p.scheduled_at) >= now)
+    };
+  }
+}
+
+export const storage = new StorageService();
