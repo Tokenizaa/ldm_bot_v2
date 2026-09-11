@@ -9,7 +9,7 @@ async function startServer() {
   const { authRouter } = await import('./server/routes/auth.js');
   const { frontendCompatRouter } = await import('./server/routes/frontend-compat.js');
   const { facebookSession } = await import('./server/services/FacebookSessionService.js');
-  const { facebookAutomation } = await import('./server/services/FacebookAutomationService.js');
+  const { facebookBrowser } = await import('./server/services/FacebookBrowserService.js');
   const { scheduler } = await import('./server/services/SchedulerService.js');
   const { storage } = await import('./server/services/StorageService.js');
 
@@ -47,9 +47,26 @@ async function startServer() {
         }
 
         const settings = await storage.getSettings();
-        const groupCheck = await facebookAutomation.verifyGroup(settings.facebook_group_url);
-        if (!groupCheck.accessible) {
-          logger.scheduler(`STARTUP_MONTHLY_SCHEDULE skipped: grupo Facebook não validado: ${groupCheck.message}`, 'error');
+        const page = await facebookBrowser.page();
+        const expected = new URL(settings.facebook_group_url);
+        const actual = new URL(page.url());
+        const normalizedExpected = expected.pathname.replace(/\/+$/, '');
+        const normalizedActual = actual.pathname.replace(/\/+$/, '');
+        const title = await page.title().catch(() => '');
+        const groupDetected = actual.origin === expected.origin &&
+          normalizedActual === normalizedExpected &&
+          /A Loja Do Mecânico/i.test(title);
+
+        logger.facebook(
+          `STEP=GROUP_VERIFY accessible=${groupDetected} url=${page.url()} title=${title}`,
+          groupDetected ? 'success' : 'error'
+        );
+
+        if (!groupDetected) {
+          logger.scheduler(
+            `STARTUP_MONTHLY_SCHEDULE skipped: grupo Facebook não validado. url=${page.url()} title=${title}`,
+            'error'
+          );
           return;
         }
 
