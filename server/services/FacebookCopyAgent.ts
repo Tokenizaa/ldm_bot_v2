@@ -67,7 +67,7 @@ export class FacebookCopyAgent {
       'Código/SKU: ' + (product.sku || 'não informado')
     ].join('\n');
 
-    const result = await nvidiaAI.generateRawCopy(systemPrompt, userPrompt, model);
+    let result = await nvidiaAI.generateRawCopy(systemPrompt, userPrompt, model);
     if (!result.success) {
       logger.ai('Falha no agente de copy para "' + product.product_name + '": ' + (result.error || 'erro desconhecido'), 'error');
       return result;
@@ -79,6 +79,37 @@ export class FacebookCopyAgent {
       .replace(/\b(?:por apenas|a partir de|por|de)\s+r\$?\s*\d[\d\s.,]*/gi, '')
       .replace(/\n{3,}/g, '\n\n')
       .trim();
+
+    // Never publish model reasoning/meta-commentary. Nemotron can occasionally
+    // answer the prompt as an analyst instead of returning the requested copy.
+    const metaLeak = /(?:^|\\n)\\s*(?:we need to|let'?s craft|let'?s place|check:|however,|actually,|we need to ensure|the name includes|vamos criar|vamos montar|precisamos garantir|verifique:)/i.test(content)
+      || /\\b(?:system prompt|user prompt|fonte de verdade|regras absolutas|resposta do modelo|modelo deve|instrução)/i.test(content);
+
+    if (metaLeak) {
+      logger.ai('Copy contaminada por texto de raciocínio; solicitando regeneração limpa.', 'warn');
+      result = await nvidiaAI.generateRawCopy([
+        'RETORNE SOMENTE A PUBLICAÇÃO FINAL.',
+        'NÃO explique, analise ou justifique.',
+        'Estrutura: gancho com nome do produto; uso/benefício somente se suportado pelos dados; CTA; @todos em linha própria; até 4 hashtags.',
+        'NUNCA inclua preço, desconto, URL, frete, avaliação ou dados não fornecidos.',
+        '',
+        'Produto: ' + productNameForCopy,
+        'Marca: ' + (product.brand || 'não informada'),
+        'Categoria: ' + (product.category || 'não informada'),
+        'SKU: ' + (product.sku || 'não informado')
+      ].join('\\n'), userPrompt, model);
+
+      if (!result.success) return result;
+
+      content = result.content
+        .replace(/https?:\\/\\/\\S+|www\\.\\S+/gi, '')
+        .replace(/\\n{3,}/g, '\\n\\n')
+        .trim();
+
+      if (/(?:^|\\n)\\s*(?:we need to|let'?s craft|check:|however,|the name includes|vamos criar|precisamos garantir|system prompt|user prompt)/i.test(content)) {
+        return { ...result, success: false, content: '', error: 'Modelo retornou texto de raciocínio em vez de copy final.' };
+      }
+    }
 
     // Deterministic mandatory mention.
     content = content.replace(/@todos\b/gi, '').trim();
