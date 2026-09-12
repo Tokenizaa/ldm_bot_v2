@@ -221,8 +221,8 @@ export class SchedulerService {
 
     // Never send persisted prompt/reasoning text to Facebook. Older publications may
     // contain an AI response that was stored before the copy-agent validation existed.
-    const pollutedCopy = /(?:^|\\n)\\s*(?:we need to|let'?s craft|let'?s place|check:|however,|actually,|we need to ensure|the name includes|vamos criar|vamos montar|precisamos garantir|verifique:)/i.test(pub.content || '')
-      || /\\b(?:system prompt|user prompt|fonte de verdade|regras absolutas|resposta do modelo|modelo deve|instrução)/i.test(pub.content || '');
+    const pollutedCopy = /(?:^|\n)\s*(?:we need to|let'?s craft|let'?s place|check:|however,|actually,|we need to ensure|the name includes|vamos criar|vamos montar|precisamos garantir|verifique:)/i.test(pub.content || '')
+      || /\b(?:system prompt|user prompt|fonte de verdade|regras absolutas|resposta do modelo|modelo deve|instrução|dados reais do produto|nome do produto\s*:|marca\s*:|categoria\s*:|código\/sku\s*:)/i.test(pub.content || '');
     if (pollutedCopy) {
       logger.scheduler(`COPY_REGENERATE_POLLUTED id=${pub.id} product=${pub.product_id}`, 'warn');
       const regenerated = await contentService.generateCopyForProduct(pub.product);
