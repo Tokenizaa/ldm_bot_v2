@@ -3,6 +3,7 @@ import { storage } from './StorageService.js';
 import { facebookAutomation } from './FacebookAutomationService.js';
 import { facebookSession } from './FacebookSessionService.js';
 import { logger } from './LoggerService.js';
+import { contentService } from './ContentService.js';
 import {
   calculatePublicationIdempotencyKey,
   normalizeGroupUrl,
@@ -216,6 +217,22 @@ export class SchedulerService {
     }
     if (!pub.product?.affiliate_url?.includes('/20889')) {
       throw new Error('Produto sem link afiliado /20889 válido.');
+    }
+
+    // Never send persisted prompt/reasoning text to Facebook. Older publications may
+    // contain an AI response that was stored before the copy-agent validation existed.
+    const pollutedCopy = /(?:^|\\n)\\s*(?:we need to|let'?s craft|let'?s place|check:|however,|actually,|we need to ensure|the name includes|vamos criar|vamos montar|precisamos garantir|verifique:)/i.test(pub.content || '')
+      || /\\b(?:system prompt|user prompt|fonte de verdade|regras absolutas|resposta do modelo|modelo deve|instrução)/i.test(pub.content || '');
+    if (pollutedCopy) {
+      logger.scheduler(`COPY_REGENERATE_POLLUTED id=${pub.id} product=${pub.product_id}`, 'warn');
+      const regenerated = await contentService.generateCopyForProduct(pub.product);
+      if (!regenerated.content?.trim()) throw new Error('FACEBOOK_COPY_REGENERATION_FAILED');
+      const updated = await storage.updatePublication(pub.id, {
+        content: regenerated.content.trim(),
+        error_message: undefined
+      });
+      if (!updated) throw new Error('FACEBOOK_COPY_REGENERATION_PERSIST_FAILED');
+      pub.content = regenerated.content.trim();
     }
     if (!pub.content?.trim() || /https?:\/\//i.test(pub.content) || /R\$/i.test(pub.content)) {
       throw new Error('Publicação bloqueada: copy contém URL ou preço.');
