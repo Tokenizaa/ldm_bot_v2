@@ -200,9 +200,12 @@ private editor(page: Page): Locator {
     }
 
     if (!(await editor.textContent().catch(() => ''))?.includes(affiliateUrl)) throw new Error('FACEBOOK_LINK_PREVIEW_INPUT_FAILED');
-    await editor.fill(copy.trim());
+    // Keep the affiliate URL in the final post. It is both the clickable destination and
+    // the source used by Facebook for the Open Graph preview. Do not remove it after preview.
+    const finalText = copy.trim() + '\\n\\n' + affiliateUrl;
+    await editor.fill(finalText);
     await page.waitForFunction(
-      (u) => !((document.querySelector("div[role='dialog'] [role='textbox']")?.textContent || '').includes(u)),
+      (u) => ((document.querySelector("div[role='dialog'] [role='textbox']")?.textContent || '').includes(u)),
       affiliateUrl,
       { timeout: 5000 }
     ).catch(() => { throw new Error('FACEBOOK_LINK_REMAINED_IN_COPY'); });
@@ -238,7 +241,7 @@ private editor(page: Page): Locator {
       `hashtags=${JSON.stringify(hashtags)} ok=${JSON.stringify(tagOk)} activeLinks=${JSON.stringify(activeTags)} mentions=${JSON.stringify(mentions)} ok=${JSON.stringify(mentionOk)} activeMentions=${JSON.stringify(activeMentions)} links=${JSON.stringify(linkedTokens)}`,
       allOk ? 'success' : 'warn'
     );
-    this.log(execId, 'PREVIEW_READY', 'preview solicitado e URL removida da copy');
+    this.log(execId, 'PREVIEW_READY', 'preview solicitado e URL mantida na publicação final');
   }
 
   /** Completar o typeahead de menção (@) — seleciona "Todos" ou confirma sugestão; fecha o popup
