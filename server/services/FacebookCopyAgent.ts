@@ -118,6 +118,20 @@ export class FacebookCopyAgent {
     const hasUrl = /https?:\/\/|www\./i.test(content);
     const hasPrice = /r\$\s*\d|\b(?:preço|preco|valor)\s*[:=-]?\s*\d|\b\d+[.,]\d{2}\s*(?:reais)?\b/i.test(content);
     const hasTodos = /@todos\b/i.test(content);
+    const hashtagCount = (content.match(/#\w+/g) || []).length;
+    const todosCount = (content.match(/@todos\b/gi) || []).length;
+    const tooLong = content.length > 900;
+    const metaLabels = /(?:dados reais do produto|nome do produto\s*:|marca\s*:|categoria\s*:|código\/sku\s*:|system prompt|user prompt|regras absolutas|fonte de verdade|we need to|let'?s craft|check:|the name includes|vamos criar|precisamos garantir)/i.test(content);
+
+    if (hashtagCount > 4 || todosCount !== 1 || tooLong || metaLabels) {
+      logger.ai('Copy rejeitada por formato contaminado/metadados para "' + product.product_name + '".', 'error');
+      return {
+        ...result,
+        success: false,
+        content: '',
+        error: 'Copy rejeitada: formato contém metadados/raciocínio, hashtags em excesso, @todos incorreto ou texto excessivo.'
+      };
+    }
 
     if (hasUrl || hasPrice || !hasTodos) {
       logger.ai('Copy rejeitada após sanitização para "' + product.product_name + '".', 'error');
