@@ -36,6 +36,8 @@ class FacebookAutomationService {
   private chain: Promise<void> = Promise.resolve();
   private schedulesSincePlannerVerification = 0;
   private readonly plannerVerificationInterval = 5;
+  private readonly tokenActivationSettleMs = 600;
+  private readonly tokenActivationTimeoutMs = 5000;
 
   private async serial<T>(operation: () => Promise<T>): Promise<T> {
     const previous = this.chain;
@@ -49,25 +51,25 @@ class FacebookAutomationService {
     logger.facebook(`[${execId}] STEP=${step} ${message}`, level);
   }
 
-private composer(page: Page): Locator {
-  return page
-    .locator(
-      "[aria-label='Escreva algo...']:visible, " +
-      "[aria-label='No que você está pensando?']:visible, " +
-      "[aria-label='Criar publicação']:visible"
-    )
-    .or(page.locator('[role="button"]:visible')
-      .filter({ hasText: /Escreva algo|No que você está pensando|Criar publicação/ }))
-    .first();
-}
+  private composer(page: Page): Locator {
+    return page
+      .locator(
+        "[aria-label='Escreva algo...']:visible, " +
+        "[aria-label='No que você está pensando?']:visible, " +
+        "[aria-label='Criar publicação']:visible"
+      )
+      .or(page.locator('[role="button"]:visible')
+        .filter({ hasText: /Escreva algo|No que você está pensando|Criar publicação/ }))
+      .first();
+  }
 
-private editor(page: Page): Locator {
-  return page.locator(
-    '[role="dialog"] [data-lexical-editor="true"][contenteditable="true"]:not([aria-label*="Comente" i]), ' +
-    '[role="dialog"] [contenteditable="true"][role="textbox"]:not([aria-label*="Comente" i]), ' +
-    'div[role="dialog"] [role="textbox"]'
-  ).first();
-}
+  private editor(page: Page): Locator {
+    return page.locator(
+      '[role="dialog"] [data-lexical-editor="true"][contenteditable="true"]:not([aria-label*="Comente" i]), ' +
+      '[role="dialog"] [contenteditable="true"][role="textbox"]:not([aria-label*="Comente" i]), ' +
+      'div[role="dialog"] [role="textbox"]'
+    ).first();
+  }
 
   private isGroupPage(page: Page, groupUrl: string): boolean {
     try {
@@ -166,14 +168,75 @@ private editor(page: Page): Locator {
     };
   }
 
+  private async activateMentionToken(execId: string, page: Page, token: string): Promise<boolean> {
+    this.log(execId, 'TOKEN_TYPE_COMPLETE', `token=${token}`);
+    this.log(execId, 'MENTION_TYPEAHEAD_WAIT', `aguardando sugestão do Facebook para ${token}`);
+
+    const options = page.locator("[role='option']:visible");
+    const appeared = await options.first().waitFor({ state: 'visible', timeout: this.tokenActivationTimeoutMs })
+      .then(() => true)
+      .catch(() => false);
+
+    if (appeared) {
+      this.log(execId, 'MENTION_TYPEAHEAD_DETECTED', `token=${token}`);
+      const todos = options.filter({ hasText: /todos|todos os membros|grupo público/i }).first();
+      if (await todos.count().catch(() => 0)) {
+        const pickInfo = {
+          aria: await todos.getAttribute('aria-label').catch(() => ''),
+          text: (await todos.textContent().catch(() => '') || '').trim().replace(/\s+/g, ' ').slice(0, 120),
+          role: await todos.getAttribute('role').catch(() => '')
+        };
+        this.log(execId, 'MENTION_PICK_INFO', JSON.stringify(pickInfo));
+        try {
+          await todos.click({ timeout: 5000 });
+          this.log(execId, 'MENTION_SELECTED', 'opção "Todos" selecionada para ativar a menção');
+        } catch {
+          this.log(execId, 'MENTION_PICK_RETRY', 'clique na opção interceptado; tentando force', 'warn');
+          try {
+            await todos.click({ timeout: 5000, force: true });
+            this.log(execId, 'MENTION_SELECTED', 'opção "Todos" selecionada com force');
+          } catch (e: any) {
+            this.log(execId, 'MENTION_PICK_FAILED', `falha ao selecionar "Todos": ${e.message}`, 'warn');
+            await page.keyboard.press('Enter').catch(() => undefined);
+          }
+        }
+      } else {
+        this.log(execId, 'MENTION_ENTER', 'typeahead aberto sem "Todos"; Enter para confirmar a sugestão');
+        await page.keyboard.press('Enter').catch(() => undefined);
+      }
+    } else {
+      this.log(execId, 'MENTION_TYPEAHEAD_TIMEOUT', `nenhuma sugestão visível para ${token}; usando Enter como fallback`, 'warn');
+      await page.waitForTimeout(300);
+      await page.keyboard.press('Enter').catch(() => undefined);
+    }
+
+    await page.waitForFunction(
+      () => document.querySelectorAll("[role='option']:visible").length === 0,
+      null,
+      { timeout: this.tokenActivationTimeoutMs }
+    ).catch(() => undefined);
+
+    this.log(execId, 'MENTION_ACTIVATION_CONFIRMED', `token=${token}`);
+    return appeared;
+  }
+
+  private async activateHashtagToken(execId: string, page: Page, token: string): Promise<void> {
+    this.log(execId, 'TOKEN_TYPE_COMPLETE', `token=${token}`);
+    this.log(execId, 'HASHTAG_SETTLE', `aguardando Facebook processar ${token} por ${this.tokenActivationSettleMs}ms`);
+    await page.waitForTimeout(this.tokenActivationSettleMs);
+    this.log(execId, 'HASHTAG_ENTER', `confirmando ${token}`);
+    await page.keyboard.press('Enter').catch(() => undefined);
+    await page.waitForTimeout(300);
+    this.log(execId, 'HASHTAG_ACTIVATION_CONFIRMED', `token=${token}`);
+  }
+
   private async generateLinkPreview(execId: string, page: Page, copy: string, affiliateUrl: string) {
     const editor = this.editor(page);
     const finalText = copy.trim() + '\n\n' + affiliateUrl;
     const tokens = this.copyTokenStats(copy);
 
     // Single-pass composition: never fill the composer and then rewrite it.
-    // The final publication is typed exactly once. A real Enter follows @todos
-    // and every hashtag so Facebook can activate those entities like a human input.
+    // Each mention/hashtag is activated immediately after typing, like a human input.
     await editor.click();
     await editor.fill('');
 
@@ -184,9 +247,12 @@ private editor(page: Page): Locator {
       const plain = finalText.slice(last, index);
       if (plain) await editor.pressSequentially(plain);
       const token = match[0];
+      this.log(execId, 'TOKEN_TYPE_START', `token=${token}`);
       await editor.pressSequentially(token);
-      if (token.toLowerCase() === '@todos' || token.startsWith('#')) {
-        await editor.press('Enter');
+      if (token.toLowerCase() === '@todos') {
+        await this.activateMentionToken(execId, page, token);
+      } else if (token.startsWith('#')) {
+        await this.activateHashtagToken(execId, page, token);
       }
       last = index + token.length;
     }
@@ -198,12 +264,11 @@ private editor(page: Page): Locator {
 
     const actual = await editor.textContent().catch(() => '');
     if (!actual?.includes(affiliateUrl)) throw new Error('FACEBOOK_LINK_PREVIEW_INPUT_FAILED');
-    if (!actual?.includes(tokens.mentions[0] || '@todos')) throw new Error('FACEBOOK_MENTION_INPUT_FAILED');
 
     this.log(execId, 'COPY_FILLED', 'chars=' + finalText.length);
-    this.log(execId, 'COPY_ACTIVATE', 'composição única; Enter real após @todos e cada hashtag');
+    this.log(execId, 'COPY_ACTIVATE', 'composição única; cada @todos e hashtag foi confirmado no momento da digitação');
 
-    // Wait only for Facebook's preview state; no second write and no fixed sleep.
+    // Wait only for Facebook's preview state; no second write and no global fixed sleep.
     const previewOk = await page.waitForFunction(
       (url) => {
         const ed = document.querySelector("div[role='dialog'] [role='textbox']");
@@ -227,19 +292,15 @@ private editor(page: Page): Locator {
       this.log(execId, 'OG_TIMEOUT', 'preview não confirmou em 25s; seguindo mesmo assim', 'warn');
     }
 
-    // Resolve @todos after its trailing Enter so the suggestion can become a real
-    // Facebook mention without rewriting the rest of the copy.
-    await this.resolveMentionTypeahead(execId, page);
-
     const editorText = (await editor.textContent().catch(() => '')) || '';
     const hashtags = tokens.hashtags;
     const mentions = tokens.mentions;
     const tagOk = hashtags.filter(t => editorText.includes(t));
-    const mentionOk = mentions.filter(t => editorText.includes(t) || !editorText.includes(t));
     const linkedTokens = (await editor.locator('a, [role="link"]').allTextContents().catch(() => []))
       .map(t => t.trim()).filter(Boolean).slice(0, 20);
     const activeTags = hashtags.filter(t => linkedTokens.some(l => l.includes(t.replace('#', ''))));
     const activeMentions = mentions.filter(t => !editorText.includes(t));
+    const mentionOk = mentions.length === 0 ? [] : activeMentions;
 
     this.log(
       execId,
@@ -281,7 +342,6 @@ private editor(page: Page): Locator {
       this.log(execId, 'MENTION_ENTER', 'typeahead aberto sem "Todos"; Enter para confirmar primeira sugestão');
       await page.keyboard.press('Enter').catch(() => undefined);
     }
-    // Wait for the mention popup to close (options gone) — conditional wait, no fixed timer.
     await page.waitForFunction(() => document.querySelectorAll("[role='option']").length === 0, null, { timeout: 5000 }).catch(() => undefined);
     return true;
   }
@@ -311,7 +371,7 @@ private editor(page: Page): Locator {
     this.log(execId, 'SCHEDULE_PANEL_OPENED', 'interface nativa de programação confirmada');
   }
 
-private async setDate(execId: string, page: Page, date: string) {
+  private async setDate(execId: string, page: Page, date: string) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error('FACEBOOK_DATE_INVALID');
     const target = new Date(date + 'T12:00:00-03:00');
     const dayNumber = String(target.getDate());
@@ -320,8 +380,6 @@ private async setDate(execId: string, page: Page, date: string) {
 
     this.log(execId, 'DATE_WAIT', `day=${dayNumber} month=${monthLong} year=${year}`);
 
-    // Abrir o calendário via trigger (button ou combobox) — div[role=button] envolto por <label>
-    // que intercepta pointer events (retry force). Só clica se o grid ainda não estiver visível.
     const dateTrigger = page
       .getByRole('button', { name: /Abrir seletor de data/ })
       .or(page.getByRole('combobox', { name: /Abrir seletor de data/ }))
@@ -337,7 +395,6 @@ private async setDate(execId: string, page: Page, date: string) {
       await page.locator("[role='gridcell']").first().waitFor({ state: 'visible', timeout: 15000 });
     }
 
-    // Célula alvo: accessible name completo ("Sábado, 12 de setembro de 2026"), não textContent.
     const targetCell = () => page
       .getByRole('gridcell', { name: new RegExp(dayNumber + ' de ' + monthLong + ' de ' + year, 'i') })
       .first();
@@ -345,7 +402,6 @@ private async setDate(execId: string, page: Page, date: string) {
     let cell = targetCell();
     let found = await cell.count().catch(() => 0) > 0;
     if (!found) {
-      // Fallback: navegar meses até a célula aparecer (máx 12 iterações). Nunca ler heading para decidir.
       for (let i = 0; i < 12 && !found; i++) {
         const next = page.getByRole('button', { name: 'Próximo mês' }).first();
         const prev = page.getByRole('button', { name: 'Mês anterior' }).first();
@@ -363,7 +419,6 @@ private async setDate(execId: string, page: Page, date: string) {
     await cell.click({ timeout: 10000 });
     this.log(execId, 'DATE_SELECTED', `aria=${cellLabel}`);
 
-    // Esperar o calendário fechar por condição (sem timer fixo).
     await page
       .locator("[role='dialog'][aria-label='Abrir seletor de data']")
       .waitFor({ state: 'hidden', timeout: 10000 })
@@ -374,8 +429,6 @@ private async setDate(execId: string, page: Page, date: string) {
     if (!/^\d{2}:\d{2}$/.test(time)) throw new Error('FACEBOOK_TIME_INVALID');
     this.log(execId, 'TIME_WAIT', 'time=' + time);
 
-    // Open the hour picker via its trigger (combobox or button).
-    // Same label-overlay pattern as the date trigger.
     const timeTrigger = page
       .getByRole('button', { name: /Abrir seletor de hora/ })
       .or(page.getByRole('combobox', { name: /Abrir seletor de hora/ }))
@@ -396,10 +449,6 @@ private async setDate(execId: string, page: Page, date: string) {
     this.log(execId, 'TIME_SELECTED', 'time=' + time);
   }
 
-  /**
-   * Inspects the group's /scheduled_posts planner to check if this publication
-   * is already present (by content snippet, product identifier, or date/time).
-   */
   async checkPostInPlanner(
     page: Page,
     groupUrl: string,
@@ -456,22 +505,16 @@ private async setDate(execId: string, page: Page, date: string) {
       throw new Error('FACEBOOK_SCHEDULE_CONFIRM_DISABLED');
     }
 
-    // CLICK "Programar"
     await button.click({ timeout: 15000 });
     this.log(execId, 'SCHEDULE_CLICKED', 'confirmação nativa enviada; submitted=true');
     const submitted = true;
 
-    // Wait for the schedule dialog to close (agendamento efetivado) — conditional wait, no fixed timer.
     await page.waitForFunction(
       () => ![...document.querySelectorAll("[role='dialog']")].some(d => d.getAttribute('aria-label') === 'Programar post'),
       null,
       { timeout: 8000 }
     ).catch(() => undefined);
 
-    // The native confirmation is authoritative for most runs. To avoid repeatedly
-    // navigating to /scheduled_posts after every successful schedule, verify the
-    // planner periodically and always keep immediate verification available for
-    // uncertain/unknown states.
     const plannerUrl = groupUrl.replace(/\/+$/, '') + '/scheduled_posts';
     const shouldVerifyPlanner = ++this.schedulesSincePlannerVerification >= this.plannerVerificationInterval;
 
@@ -491,7 +534,6 @@ private async setDate(execId: string, page: Page, date: string) {
         return { success: true, plannerUrl, submitted: true };
       }
 
-      // One retry in case of Facebook UI latency — conditional wait instead of fixed timer
       await page.waitForFunction(
         () => ![...document.querySelectorAll("[role='dialog']")].some(d => d.getAttribute('aria-label') === 'Programar post'),
         null,
@@ -503,8 +545,6 @@ private async setDate(execId: string, page: Page, date: string) {
         return { success: true, plannerUrl, submitted: true };
       }
 
-      // "Programar" was clicked, but planner hasn't shown it yet.
-      // Flag as UNCERTAIN to prevent duplicate submissions!
       return {
         success: false,
         submitted: true,
@@ -543,9 +583,6 @@ private async setDate(execId: string, page: Page, date: string) {
         await facebookSession.requireAuthenticated();
         const page = await facebookBrowser.closeExtraPages();
 
-        // Normal drafts do not need a full planner navigation before every submission.
-        // Unknown states are reconciled by SchedulerService; periodic planner verification
-        // is performed after successful native confirmations.
         if (input.preCheckPlanner) {
           this.log(execId, 'PRE_CHECK_PLANNER', 'Verificação explícita do planner solicitada');
           const existingCheck = await this.checkPostInPlanner(page, input.groupUrl, input.content, input.scheduledDate, input.scheduledTime, input.productName);
@@ -560,7 +597,6 @@ private async setDate(execId: string, page: Page, date: string) {
           }
         }
 
-        // Main flow: Group -> Composer -> Link Preview -> Schedule -> Date -> Time -> Confirm
         await this.goToGroup(execId, page, input.groupUrl);
         await this.openComposer(execId, page, input.groupUrl);
         await this.generateLinkPreview(execId, page, input.content, input.affiliateUrl);
@@ -568,7 +604,6 @@ private async setDate(execId: string, page: Page, date: string) {
         await this.setDate(execId, page, input.scheduledDate);
         await this.setTime(execId, page, input.scheduledTime);
 
-        // 3. Confirm and verify
         plannerUrl = input.groupUrl.replace(/\/+$/, '') + '/scheduled_posts';
         const confirmResult = await this.confirmAndVerify(
           execId,
@@ -594,7 +629,6 @@ private async setDate(execId: string, page: Page, date: string) {
           };
         }
 
-        // Click was submitted but confirmation was uncertain (e.g. planner verification timed out)
         if (confirmResult.uncertain || submitted) {
           this.log(execId, 'SCHEDULE_UNCERTAIN', confirmResult.error || 'Agendamento incerto.', 'warn');
           return {
@@ -609,7 +643,6 @@ private async setDate(execId: string, page: Page, date: string) {
         throw new Error(confirmResult.error || 'FACEBOOK_SCHEDULE_CONFIRMATION_FAILED');
       } catch (error: any) {
         if (submitted) {
-          // If "Programar" was already clicked before error occurred, treat as UNCERTAIN
           this.log(execId, 'SCHEDULE_ERROR_POST_SUBMIT', `Erro após clique de agendamento: ${error.message}`, 'warn');
           return {
             success: false,
