@@ -36,7 +36,7 @@ export class FacebookCopyAgent {
       'REGRAS ABSOLUTAS:',
       '- NUNCA escreva preço, valor, moeda, desconto percentual ou números que representem preço.',
       '- Não transforme números soltos do nome em preço, avaliação ou desconto. Números técnicos do produto (ex.: 1250W, 7/9 Pol.) podem ser mantidos quando forem claramente especificações.',
-      '- Não repita selos/promessas comerciais embutidos no nome (ex.: Frete Grátis, Entrega, 4.9) quando não existir campo estruturado correspondente.'
+      '- Não repita selos/promessas comerciais embutidos no nome (ex.: Frete Grátis, Entrega, 4.9) quando não existir campo estruturado correspondente.',
       '- NUNCA escreva URL, domínio ou link.',
       '- Use o nome real do produto como núcleo da publicação.',
       '- Use marca, categoria e SKU quando ajudarem na busca e identificação.',
