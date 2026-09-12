@@ -44,7 +44,7 @@ export class FacebookCopyAgent {
       'Quando o nome trouxer várias especificações, distribua essas informações naturalmente nas frases, sem criar características novas.',
       'Evite frases genéricas como "confira este produto" como único conteúdo. O leitor deve entender pelo texto o que está sendo anunciado e quais são seus principais atributos disponíveis no nome.',
       'Inclua @todos exatamente uma vez em uma linha própria.',
-      'Use de 4 a 6 hashtags SEO semanticamente derivadas do nome, marca ou categoria.'
+      'Use de 4 a 6 hashtags SEO semanticamente derivadas do nome, marca ou categoria.',
       'Hashtags compostas são permitidas quando formadas por palavras existentes no produto, por exemplo #CaboDeVela a partir de "Cabo de Vela".',
       'Finalize com uma CTA factual para conhecer ou conferir o produto, sem prometer oferta, desconto ou preço.'
     ].join('\n');
