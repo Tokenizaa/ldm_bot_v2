@@ -227,7 +227,7 @@ export class FacebookCopyAgent {
     return [
       sentences.join(' '),
       '@todos',
-      this.buildHashtags(productName, brand, category).join(' ')
+      this.buildHashtags(productName, brand, category).join('\\n')
     ].filter(Boolean).join('\n\n');
   }
 
@@ -272,8 +272,8 @@ export class FacebookCopyAgent {
       if (!tags.some(existing => existing.toLowerCase() === tag.toLowerCase())) tags.push(tag);
     };
 
-    // Build several semantic phrases from the product wording.
-    // Example: "Teste de Arrefecimento com 9 Peças" -> #TesteArrefecimento and #ArrefecimentoPecas.
+    // Prefer short, directly searchable phrases from adjacent product words.
+    // Every generated hashtag must be made exclusively from words present in the source.
     for (let i = 0; i < significant.length && tags.length < 3; i++) {
       const phrase = significant.slice(i, i + 2);
       if (phrase.length >= 2) add(phrase.map(this.toTagWord).join(''));
