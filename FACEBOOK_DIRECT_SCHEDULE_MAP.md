@@ -68,7 +68,7 @@
 3. Preencher a área de texto com o conteúdo de teste.
 4. Clicar diretamente no botão de agendamento (ícone com aria-label "Programar post").
 5. No seletor de data que aparece:
-   - Clicar na célula da data desejada (ex.: "12 de setembro de 2026").
+   - Clicar na célula da data desejada (ex.: "12 de setembro de 2026", localizada pelo accessible name/aria-label da célula).
 6. No seletor de hora que aparece:
    - Clicar na opção de hora desejada (ex.: "10:30").
 7. Clicar no botão de confirmação de agendamento (texto "Programar", aria-label "Programar").
@@ -81,10 +81,12 @@
 | Abrir composer | `[aria-label='Escreva algo...']` |
 | Caixa de texto do composer | `div[role='dialog'][aria-label='Criar post'] [role='textbox']` |
 | Botão de agendamento (ícone) | `[aria-label='Programar post']` |
-| Seletor de data (célula) | `[role='gridcell']:has-text('12 de setembro de 2026')` |
+| Seletor de data (célula) | `getByRole('gridcell', { name: /12 de setembro de 2026/ })` — accessible name (aria-label completo "Sábado, 12 de setembro de 2026"; `:has-text` NÃO funciona pois textContent é só "12") |
 | Seletor de hora (opção) | `[role='option']:has-text('10:30')` |
 | Botão de confirmação de agendamento | `[aria-label='Programar']` |
 | Botão de publicar (para referência) | `[aria-label='Postar']` |
+
+**Nota sobre a data:** versão anterior documentava `:has-text` com o texto longo ("12 de setembro de 2026"); o DOM atual expõe o texto completo somente via aria-label do gridcell (`textContent` é só o número do dia). Qualquer executor deve clicar via accessible name (`getByRole('gridcell', { name: /.../ })`).
 
 ## J. Código Playwright correspondente
 ```javascript

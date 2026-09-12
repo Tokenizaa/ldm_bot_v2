@@ -46,13 +46,25 @@ class FacebookAutomationService {
     logger.facebook(`[${execId}] STEP=${step} ${message}`, level);
   }
 
-  private composer(page: Page): Locator {
-    return page.locator("[aria-label='Escreva algo...']:visible, [aria-label='No que você está pensando?']:visible, [aria-label='Criar publicação']:visible").first();
-  }
+private composer(page: Page): Locator {
+  return page
+    .locator(
+      "[aria-label='Escreva algo...']:visible, " +
+      "[aria-label='No que você está pensando?']:visible, " +
+      "[aria-label='Criar publicação']:visible"
+    )
+    .or(page.locator('[role="button"]:visible')
+      .filter({ hasText: /Escreva algo|No que você está pensando|Criar publicação/ }))
+    .first();
+}
 
-  private editor(page: Page): Locator {
-    return page.locator("div[role='dialog'] [role='textbox']").last();
-  }
+private editor(page: Page): Locator {
+  return page.locator(
+    '[role="dialog"] [data-lexical-editor="true"][contenteditable="true"]:not([aria-label*="Comente" i]), ' +
+    '[role="dialog"] [contenteditable="true"][role="textbox"]:not([aria-label*="Comente" i]), ' +
+    'div[role="dialog"] [role="textbox"]'
+  ).first();
+}
 
   private isGroupPage(page: Page, groupUrl: string): boolean {
     try {
@@ -62,18 +74,19 @@ class FacebookAutomationService {
   }
 
   private async waitForGroupReady(execId: string, page: Page, groupUrl: string) {
-    const deadline = Date.now() + 20000;
-    while (Date.now() < deadline) {
-      if (this.isGroupPage(page, groupUrl)) {
-        const title = await page.title().catch(() => '');
-        if (/A Loja Do Mecânico/i.test(title) || await page.locator('main').count() > 0) {
-          this.log(execId, 'GROUP_READY', `url=${page.url()} title=${title}`);
-          return;
-        }
-      }
-      await page.waitForTimeout(1000);
+    if (!this.isGroupPage(page, groupUrl)) {
+      const expected = new URL(groupUrl);
+      await page.waitForFunction(
+        ({ origin, pathname }) => {
+          const samePath = window.location.origin === origin &&
+            window.location.pathname.replace(/\/+$/, '') === pathname;
+          return samePath && (/A Loja Do Mecânico/i.test(document.title) || !!document.querySelector('main'));
+        },
+        { origin: expected.origin, pathname: expected.pathname.replace(/\/+$/, '') },
+        { timeout: 20000 }
+      ).catch(() => { throw new Error('FACEBOOK_GROUP_NOT_READY'); });
     }
-    throw new Error('FACEBOOK_GROUP_NOT_READY');
+    this.log(execId, 'GROUP_READY', `url=${page.url()} title=${await page.title().catch(() => '')}`);
   }
 
   private async goToGroup(execId: string, page: Page, groupUrl: string) {
@@ -103,16 +116,15 @@ class FacebookAutomationService {
   }
 
   private async waitForComposer(execId: string, page: Page, groupUrl: string): Promise<Locator> {
-    const deadline = Date.now() + 20000;
     this.log(execId, 'COMPOSER_WAIT', 'procurando gatilho real do compositor');
 
-    while (Date.now() < deadline) {
-      const trigger = this.composer(page);
-      if (await trigger.count() && await trigger.isVisible().catch(() => false)) {
-        this.log(execId, 'COMPOSER_FOUND', `aria=${await trigger.getAttribute('aria-label').catch(() => '')}`);
-        return trigger;
-      }
-      await page.waitForTimeout(1000);
+    const trigger = this.composer(page);
+    try {
+      await trigger.first().waitFor({ state: 'visible', timeout: 20000 });
+      this.log(execId, 'COMPOSER_FOUND', `aria=${await trigger.getAttribute('aria-label').catch(() => '')}`);
+      return trigger;
+    } catch {
+      // diagnóstico abaixo
     }
 
     this.log(execId, 'COMPOSER_DIAGNOSTIC', JSON.stringify(await this.composerDiagnostics(page)), 'warn');
@@ -152,91 +164,226 @@ class FacebookAutomationService {
     this.log(execId, 'COPY_FILLED', 'chars=' + content.length);
   }
 
+  private copyTokenStats(copy: string): { hashtags: string[]; mentions: string[] } {
+    return {
+      hashtags: copy.match(/#\w+/g) || [],
+      mentions: copy.match(/@\w+/g) || []
+    };
+  }
+
   private async generateLinkPreview(execId: string, page: Page, copy: string, affiliateUrl: string) {
     const editor = this.editor(page);
     await this.fillComposer(execId, page, copy.trim() + '\n' + affiliateUrl);
     this.log(execId, 'PREVIEW_START', 'URL afiliada adicionada temporariamente para gerar preview');
 
-    const previewDeadline = Date.now() + 12000;
-    while (Date.now() < previewDeadline) {
-      const text = await editor.textContent().catch(() => '');
-      const dialogText = await page.locator('[role="dialog"]:visible').innerText().catch(() => '');
-      if (text?.includes(affiliateUrl) && (dialogText.includes('Loja') || dialogText.includes('mecânico') || await page.locator('[role="dialog"]:visible img').count() > 0)) break;
-      await page.waitForTimeout(1000);
+    // Wait for the Open Graph preview to fully render (title, description, image) — conditional wait.
+    const previewOk = await page.waitForFunction(
+      (url) => {
+        const ed = document.querySelector("div[role='dialog'] [role='textbox']");
+        const dlg = [...document.querySelectorAll("[role='dialog']")].at(-1);
+        const txt = ed?.textContent || '';
+        const dl = dlg?.textContent || '';
+        const links = dlg?.querySelectorAll("a[href*='lojadomecanico'], a[href*='mecanico']").length || 0;
+        const imgs = dlg?.querySelectorAll('img').length || 0;
+        return txt.includes(url) && (dl.includes('Loja') || dl.includes('mecânico') || links > 0 || imgs > 0);
+      },
+      affiliateUrl,
+      { timeout: 25000 }
+    ).then(() => true).catch(() => false);
+    if (previewOk) {
+      const dialog = page.locator('[role="dialog"]:visible').last();
+      const previewLinks = await dialog.locator("a[href*='lojadomecanico'], a[href*='mecanico']").count().catch(() => 0);
+      const previewImgs = await dialog.locator('img').count().catch(() => 0);
+      this.log(execId, 'OG_READY', `preview completo (links=${previewLinks} imgs=${previewImgs})`);
+    } else {
+      this.log(execId, 'OG_TIMEOUT', 'preview não confirmou em 25s; seguindo mesmo assim', 'warn');
     }
 
     if (!(await editor.textContent().catch(() => ''))?.includes(affiliateUrl)) throw new Error('FACEBOOK_LINK_PREVIEW_INPUT_FAILED');
     await editor.fill(copy.trim());
-    await page.waitForTimeout(1500);
-    if ((await editor.textContent().catch(() => ''))?.includes(affiliateUrl)) throw new Error('FACEBOOK_LINK_REMAINED_IN_COPY');
+    await page.waitForFunction(
+      (u) => !((document.querySelector("div[role='dialog'] [role='textbox']")?.textContent || '').includes(u)),
+      affiliateUrl,
+      { timeout: 5000 }
+    ).catch(() => { throw new Error('FACEBOOK_LINK_REMAINED_IN_COPY'); });
+
+    // Facebook only parses #hashtags and @mentions when a space follows them.
+    // fill() inserts literal text; a trailing Space triggers the composer to
+    // convert them into active links/mentions.
+    this.log(execId, 'COPY_ACTIVATE', 'enviando Space para ativar # e @');
+    await editor.press('Space');
+    // Wait for the mention typeahead (or any option popup) to open after the Space — conditional wait.
+    await page.waitForFunction(() => document.querySelectorAll("[role='option']").length > 0, null, { timeout: 5000 }).catch(() => undefined);
+    this.log(execId, 'COPY_ACTIVATE_DONE', 'Space enviado');
+
+    // Complete the mention typeahead (@todos → "Todos") so the popup closes and
+    // the mention becomes active before verification.
+    await this.resolveMentionTypeahead(execId, page);
+
+    // Verify # hashtags and @ mentions survived the refill — and whether they became active links.
+    const { hashtags, mentions } = this.copyTokenStats(copy);
+    const editorText = (await editor.textContent().catch(() => '')) || '';
+    const tagOk = hashtags.filter(t => editorText.includes(t));
+    const mentionOk = mentions.filter(t => editorText.includes(t));
+    const linkedTokens = (await editor.locator('a, [role="link"]').allTextContents().catch(() => []))
+      .map(t => t.trim()).filter(Boolean).slice(0, 10);
+    const activeTags = hashtags.filter(t => linkedTokens.some(l => l.includes(t.replace('#', ''))));
+    // A mention is ACTIVE when the raw "@todos" was replaced by a mention chip — so it no longer
+    // appears verbatim in the editor text (Facebook renders it as "Todos" or the target name).
+    const activeMentions = mentions.filter(t => !editorText.includes(t));
+    const allOk = tagOk.length === hashtags.length && mentionOk.length === mentions.length;
+    this.log(
+      execId,
+      'COPY_VERIFY',
+      `hashtags=${JSON.stringify(hashtags)} ok=${JSON.stringify(tagOk)} activeLinks=${JSON.stringify(activeTags)} mentions=${JSON.stringify(mentions)} ok=${JSON.stringify(mentionOk)} activeMentions=${JSON.stringify(activeMentions)} links=${JSON.stringify(linkedTokens)}`,
+      allOk ? 'success' : 'warn'
+    );
     this.log(execId, 'PREVIEW_READY', 'preview solicitado e URL removida da copy');
+  }
+
+  /** Completar o typeahead de menção (@) — seleciona "Todos" ou confirma sugestão; fecha o popup
+   *  que, se aberto, intercepta o clique nos botões do rodapé do composer. */
+  private async resolveMentionTypeahead(execId: string, page: Page): Promise<boolean> {
+    const options = page.locator("[role='option']:visible");
+    const count = await options.count().catch(() => 0);
+    if (count === 0) return false;
+    const todos = options.filter({ hasText: /todos|todos os membros|grupo público/i }).first();
+    if (await todos.count().catch(() => 0)) {
+      const pickInfo = {
+        aria: await todos.getAttribute('aria-label').catch(() => ''),
+        text: (await todos.textContent().catch(() => '') || '').trim().replace(/\s+/g, ' ').slice(0, 120),
+        role: await todos.getAttribute('role').catch(() => '')
+      };
+      this.log(execId, 'MENTION_PICK_INFO', JSON.stringify(pickInfo));
+      this.log(execId, 'MENTION_PICK', 'opção "Todos" encontrada no typeahead; clicando para ativar menção');
+      try {
+        await todos.click({ timeout: 5000 });
+        this.log(execId, 'MENTION_PICKED', 'clique na opção "Todos" efetivado');
+      } catch {
+        this.log(execId, 'MENTION_PICK_RETRY', 'clique na opção interceptado; tentando force', 'warn');
+        try {
+          await todos.click({ timeout: 5000, force: true });
+          this.log(execId, 'MENTION_PICKED', 'clique force na opção "Todos" efetivado');
+        } catch (e: any) {
+          this.log(execId, 'MENTION_PICK_FAILED', `falha ao clicar em "Todos": ${e.message}`, 'warn');
+        }
+      }
+    } else {
+      this.log(execId, 'MENTION_ENTER', 'typeahead aberto sem "Todos"; Enter para confirmar primeira sugestão');
+      await page.keyboard.press('Enter').catch(() => undefined);
+    }
+    // Wait for the mention popup to close (options gone) — conditional wait, no fixed timer.
+    await page.waitForFunction(() => document.querySelectorAll("[role='option']").length === 0, null, { timeout: 5000 }).catch(() => undefined);
+    return true;
   }
 
   private async openScheduleDirect(execId: string, page: Page) {
     const button = page.locator("[aria-label='Programar post']:visible").last();
     this.log(execId, 'DIRECT_SCHEDULE_WAIT', "selector=[aria-label='Programar post']");
     await button.waitFor({ state: 'visible', timeout: 15000 });
-    await button.click({ timeout: 15000 });
 
-    // Validate that schedule UI with calendar/time pickers opened
-    const scheduleUi = page.locator("[role='dialog']:visible, [role='menu']:visible").last();
-    await scheduleUi.waitFor({ state: 'visible', timeout: 15000 });
+    // If a mention typeahead (or any option popup) is open over the footer, complete/dismiss it
+    // FIRST — an open popup intercepts pointer events on "Programar post".
+    await this.resolveMentionTypeahead(execId, page);
 
-    const hasScheduleControls = await page.locator("[role='gridcell'], [role='listbox'], input[type='text'], [aria-label*='Data'], [aria-label*='Hora']").count().catch(() => 0);
-    if (hasScheduleControls === 0) {
-      this.log(execId, 'SCHEDULE_PANEL_RETRY', 'Aguardando renderização completa dos controles de agendamento', 'warn');
-      await page.waitForTimeout(1500);
+    try {
+      await button.click({ timeout: 8000 });
+    } catch {
+      this.log(execId, 'SCHEDULE_BUTTON_FORCE', 'clique normal interceptado por overlay; tentando force', 'warn');
+      await button.click({ timeout: 10000, force: true });
     }
+
+    // Wait for the REAL schedule dialog (contains the "Abrir seletor de data" combobox)
+    const scheduleDialog = page
+      .locator("[role='dialog']:visible")
+      .filter({ has: page.getByRole('combobox', { name: /Abrir seletor de data/ }) })
+      .first();
+    await scheduleDialog.waitFor({ state: 'visible', timeout: 15000 });
     this.log(execId, 'SCHEDULE_PANEL_OPENED', 'interface nativa de programação confirmada');
   }
 
-  private async setDate(execId: string, page: Page, date: string) {
+private async setDate(execId: string, page: Page, date: string) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error('FACEBOOK_DATE_INVALID');
     const target = new Date(date + 'T12:00:00-03:00');
     const dayNumber = String(target.getDate());
-    const ptLabel = target.toLocaleDateString('pt-BR', { day: 'numeric', month: 'long', year: 'numeric' });
-    const shortPtLabel = target.toLocaleDateString('pt-BR', { day: 'numeric', month: 'short', year: 'numeric' });
+    const monthLong = target.toLocaleDateString('pt-BR', { month: 'long' });
+    const year = String(target.getFullYear());
 
-    this.log(execId, 'DATE_WAIT', `label="${ptLabel}" day=${dayNumber}`);
+    this.log(execId, 'DATE_WAIT', `day=${dayNumber} month=${monthLong} year=${year}`);
 
-    // Try multiple selector variants for resilient date matching
-    const cellByLongLabel = page.locator("[role='gridcell']:visible").filter({ hasText: ptLabel }).last();
-    if (await cellByLongLabel.count() > 0) {
-      await cellByLongLabel.click({ timeout: 10000 });
-      this.log(execId, 'DATE_SELECTED', 'via long label: ' + ptLabel);
-      return;
+    // Abrir o calendário via trigger (button ou combobox) — div[role=button] envolto por <label>
+    // que intercepta pointer events (retry force). Só clica se o grid ainda não estiver visível.
+    const dateTrigger = page
+      .getByRole('button', { name: /Abrir seletor de data/ })
+      .or(page.getByRole('combobox', { name: /Abrir seletor de data/ }))
+      .first();
+    await dateTrigger.waitFor({ state: 'visible', timeout: 15000 });
+    if (await page.locator("[role='gridcell']:visible").count().catch(() => 0) === 0) {
+      try {
+        await dateTrigger.click({ timeout: 8000 });
+      } catch {
+        this.log(execId, 'DATE_TRIGGER_FORCE', 'clique interceptado por label; tentando force', 'warn');
+        await dateTrigger.click({ timeout: 10000, force: true });
+      }
+      await page.locator("[role='gridcell']").first().waitFor({ state: 'visible', timeout: 15000 });
     }
 
-    const cellByShortLabel = page.locator("[role='gridcell']:visible").filter({ hasText: shortPtLabel }).last();
-    if (await cellByShortLabel.count() > 0) {
-      await cellByShortLabel.click({ timeout: 10000 });
-      this.log(execId, 'DATE_SELECTED', 'via short label: ' + shortPtLabel);
-      return;
-    }
+    // Célula alvo: accessible name completo ("Sábado, 12 de setembro de 2026"), não textContent.
+    const targetCell = () => page
+      .getByRole('gridcell', { name: new RegExp(dayNumber + ' de ' + monthLong + ' de ' + year, 'i') })
+      .first();
 
-    // Try exact numeric day match inside calendar grid
-    const cellByDay = page.locator("[role='gridcell']:visible").filter({ hasText: new RegExp(`^\\s*${dayNumber}\\s*$`) }).last();
-    if (await cellByDay.count() > 0) {
-      await cellByDay.click({ timeout: 10000 });
-      this.log(execId, 'DATE_SELECTED', 'via gridcell day number: ' + dayNumber);
-      return;
+    let cell = targetCell();
+    let found = await cell.count().catch(() => 0) > 0;
+    if (!found) {
+      // Fallback: navegar meses até a célula aparecer (máx 12 iterações). Nunca ler heading para decidir.
+      for (let i = 0; i < 12 && !found; i++) {
+        const next = page.getByRole('button', { name: 'Próximo mês' }).first();
+        const prev = page.getByRole('button', { name: 'Mês anterior' }).first();
+        const navButton = (await next.count().catch(() => 0) > 0 ? next : prev);
+        await navButton.waitFor({ state: 'visible', timeout: 10000 }).catch(() => undefined);
+        await navButton.click({ timeout: 10000 }).catch(() => undefined);
+        cell = targetCell();
+        found = await cell.count().catch(() => 0) > 0;
+      }
     }
+    if (!found) throw new Error('FACEBOOK_DATE_CELL_NOT_FOUND');
 
-    // Fallback: aria-label containing day number and month
-    const cellByAria = page.locator(`[role='gridcell'][aria-label*='${dayNumber}']:visible`).last();
-    await cellByAria.waitFor({ state: 'visible', timeout: 10000 });
-    await cellByAria.click({ timeout: 10000 });
-    this.log(execId, 'DATE_SELECTED', 'via aria-label fallback');
+    await cell.waitFor({ state: 'visible', timeout: 10000 });
+    const cellLabel = await cell.getAttribute('aria-label').catch(() => '');
+    await cell.click({ timeout: 10000 });
+    this.log(execId, 'DATE_SELECTED', `aria=${cellLabel}`);
+
+    // Esperar o calendário fechar por condição (sem timer fixo).
+    await page
+      .locator("[role='dialog'][aria-label='Abrir seletor de data']")
+      .waitFor({ state: 'hidden', timeout: 10000 })
+      .catch(() => undefined);
   }
 
   private async setTime(execId: string, page: Page, time: string) {
     if (!/^\d{2}:\d{2}$/.test(time)) throw new Error('FACEBOOK_TIME_INVALID');
     this.log(execId, 'TIME_WAIT', 'time=' + time);
 
-    // Scope search strictly to visible listbox or dropdown dialog
-    const option = page.locator("[role='listbox']:visible [role='option']:visible, div[role='dialog'] [role='option']:visible, div[role='menu'] [role='option']:visible").filter({ hasText: time }).last();
-    await option.waitFor({ state: 'visible', timeout: 15000 });
-    await option.click({ timeout: 15000 });
+    // Open the hour picker via its trigger (combobox or button).
+    // Same label-overlay pattern as the date trigger.
+    const timeTrigger = page
+      .getByRole('button', { name: /Abrir seletor de hora/ })
+      .or(page.getByRole('combobox', { name: /Abrir seletor de hora/ }))
+      .first();
+    await timeTrigger.waitFor({ state: 'visible', timeout: 15000 });
+    try {
+      await timeTrigger.click({ timeout: 8000 });
+    } catch {
+      this.log(execId, 'TIME_TRIGGER_FORCE', 'clique interceptado por label; tentando force', 'warn');
+      await timeTrigger.click({ timeout: 10000, force: true });
+    }
+
+    const option = page
+      .getByRole('option', { name: time, exact: true })
+      .or(page.locator("[role='option']:visible").filter({ hasText: time }).last());
+    await option.first().waitFor({ state: 'visible', timeout: 15000 });
+    await option.first().click({ timeout: 15000 });
     this.log(execId, 'TIME_SELECTED', 'time=' + time);
   }
 
@@ -255,7 +402,7 @@ class FacebookAutomationService {
     const plannerUrl = groupUrl.replace(/\/+$/, '') + '/scheduled_posts';
     try {
       await page.goto(plannerUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
-      await page.waitForTimeout(2000);
+      await page.waitForFunction(() => (document.body.innerText || '').trim().length > 0, null, { timeout: 10000 }).catch(() => undefined);
 
       const bodyText = await page.locator('body').innerText().catch(() => '');
       const normalizedBody = bodyText.replace(/\s+/g, ' ');
@@ -299,7 +446,12 @@ class FacebookAutomationService {
     this.log(execId, 'SCHEDULE_CLICKED', 'confirmação nativa enviada; submitted=true');
     const submitted = true;
 
-    await page.waitForTimeout(3000);
+    // Wait for the schedule dialog to close (agendamento efetivado) — conditional wait, no fixed timer.
+    await page.waitForFunction(
+      () => ![...document.querySelectorAll("[role='dialog']")].some(d => d.getAttribute('aria-label') === 'Programar post'),
+      null,
+      { timeout: 8000 }
+    ).catch(() => undefined);
 
     // Navigate to scheduled posts planner to verify
     const plannerUrl = groupUrl.replace(/\/+$/, '') + '/scheduled_posts';
@@ -311,8 +463,12 @@ class FacebookAutomationService {
         return { success: true, plannerUrl, submitted: true };
       }
 
-      // One retry after 3 seconds in case of Facebook UI latency
-      await page.waitForTimeout(3000);
+      // One retry in case of Facebook UI latency — conditional wait instead of fixed timer
+      await page.waitForFunction(
+        () => ![...document.querySelectorAll("[role='dialog']")].some(d => d.getAttribute('aria-label') === 'Programar post'),
+        null,
+        { timeout: 8000 }
+      ).catch(() => undefined);
       const recheck = await this.checkPostInPlanner(page, groupUrl, content, scheduledDate, scheduledTime, productName);
       if (recheck.found) {
         this.log(execId, 'PLANNER_VERIFY_RECHECK', 'Post encontrado na segunda verificação');
