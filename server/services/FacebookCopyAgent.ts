@@ -129,17 +129,15 @@ export class FacebookCopyAgent {
     }
 
     const generated = await this.generate(product, customModel);
-    if (!this.isPublicationReady(generated.content, product)) {
-      // generate() is expected to return the deterministic fallback, but keep this
-      // final guard so a future change can never leak model output into Facebook.
-      return this.buildDeterministicCopy(
-        this.cleanProductName(product.product_name),
-        this.cleanField(product.brand),
-        this.cleanField(product.category),
-        this.cleanField(product.sku)
-      );
-    }
-    return this.normalizeAndValidate(generated.content, this.cleanProductName(product.product_name), this.cleanField(product.brand), this.cleanField(product.category), this.cleanField(product.sku)) || this.buildDeterministicCopy(this.cleanProductName(product.product_name), this.cleanField(product.brand), this.cleanField(product.category), this.cleanField(product.sku));
+    const productName = this.cleanProductName(product.product_name);
+    const brand = this.cleanField(product.brand);
+    const category = this.cleanField(product.category);
+    const sku = this.cleanField(product.sku);
+
+    // The AI path is optional. If it fails validation, publish only the
+    // deterministic formatter; never send an unvalidated AI response.
+    const normalized = this.normalizeAndValidate(generated.content, productName, brand, category, sku);
+    return normalized || this.buildDeterministicCopy(productName, brand, category, sku);
   }
 
   /**
@@ -230,7 +228,7 @@ export class FacebookCopyAgent {
     return [
       '🔧 ' + identity,
       categoryText || skuText ? (categoryText + skuText).trim() : '',
-      'Confira este produto e veja todos os detalhes da oferta.',
+      'Confira este produto e veja mais detalhes.',
       '@todos',
       hashtags.join(' ')
     ].filter(Boolean).join('\n\n');
