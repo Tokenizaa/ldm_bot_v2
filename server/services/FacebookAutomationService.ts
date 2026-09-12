@@ -200,7 +200,10 @@ private editor(page: Page): Locator {
       last = index + token.length;
     }
     const tail = finalText.slice(last);
-    if (tail) await editor.pressSequentially(tail);
+    if (tail) {
+      await editor.pressSequentially(tail);
+      if (tail.trim() === affiliateUrl) await editor.press('Space');
+    }
 
     const actual = await editor.textContent().catch(() => '');
     if (!actual?.includes(affiliateUrl)) throw new Error('FACEBOOK_LINK_PREVIEW_INPUT_FAILED');
