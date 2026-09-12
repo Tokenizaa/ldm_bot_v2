@@ -248,10 +248,13 @@ export class CrawlerService {
         last_scraped_at: new Date().toISOString(),
       });
 
-      if (result.copyNeedsRegeneration) {
+      const storedCopyInvalid = !result.product.facebook_copy?.trim()
+        || !contentService.isPublicationCopySafe(result.product, result.product.facebook_copy);
+      if (result.copyNeedsRegeneration || storedCopyInvalid) {
+        const reason = result.copyNeedsRegeneration ? 'dados do produto alterados' : 'copy antiga/inválida detectada';
         const copyResult = await contentService.generateCopyForProduct(result.product);
         await storage.updateProductCopy(result.product.id, copyResult.content);
-        logger.crawler(`Copy Facebook preparada para: ${result.product.product_name}`);
+        logger.crawler('Copy Facebook preparada para: ' + result.product.product_name + ' (' + reason + ')');
       }
       valid++;
       if (result.isNew) created++;
