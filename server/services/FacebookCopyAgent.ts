@@ -24,9 +24,10 @@ export class FacebookCopyAgent {
     const sku = this.cleanField(product.sku);
 
     if (!nvidiaAI.isConfigured()) {
+      const deterministic = this.buildDeterministicCopy(productName, brand, category, sku);
       return {
         success: true,
-        content: this.buildDeterministicCopy(productName, brand, category, sku),
+        content: deterministic,
         model: model || 'deterministic',
         error: 'NVIDIA_API_KEY não configurada; copy determinística utilizada.'
       };
@@ -62,13 +63,21 @@ export class FacebookCopyAgent {
     if (first.success) {
       const normalized = this.normalizeAndValidate(first.content, productName, brand, category, sku);
       if (normalized) return { ...first, success: true, content: normalized };
+      logger.ai(`COPY_VALIDATION_FAILED source=ai product="${productName}" reason=${this.validationReason(first.content, productName, brand, category, sku)}`, 'warn');
       logger.ai('Modelo retornou copy inválida/contaminada; usando fallback determinístico.', 'warn');
     }
 
     const deterministic = this.buildDeterministicCopy(productName, brand, category, sku);
+    const normalizedDeterministic = this.normalizeAndValidate(deterministic, productName, brand, category, sku);
+    if (!normalizedDeterministic) {
+      const reason = this.validationReason(deterministic, productName, brand, category, sku);
+      logger.ai(`COPY_VALIDATION_FAILED source=deterministic product="${productName}" reason=${reason}`, 'error');
+      throw new Error(`FACEBOOK_COPY_DETERMINISTIC_INVALID:${reason}`);
+    }
+
     return {
       success: true,
-      content: deterministic,
+      content: normalizedDeterministic,
       model: first.model || model || 'deterministic',
       tokensUsed: first.tokensUsed,
       error: first.success ? undefined : first.error
@@ -116,7 +125,16 @@ export class FacebookCopyAgent {
 
     const generated = await this.generate(product, customModel);
     const normalized = this.normalizeAndValidate(generated.content, productName, brand, category, sku);
-    return normalized || this.buildDeterministicCopy(productName, brand, category, sku);
+    if (normalized) return normalized;
+
+    const deterministic = this.buildDeterministicCopy(productName, brand, category, sku);
+    const normalizedDeterministic = this.normalizeAndValidate(deterministic, productName, brand, category, sku);
+    if (!normalizedDeterministic) {
+      const reason = this.validationReason(deterministic, productName, brand, category, sku);
+      logger.ai(`COPY_VALIDATION_FAILED source=ensure-fallback product="${productName}" reason=${reason}`, 'error');
+      throw new Error(`FACEBOOK_COPY_DETERMINISTIC_INVALID:${reason}`);
+    }
+    return normalizedDeterministic;
   }
 
   private normalizeAndValidate(raw: string, productName: string, brand: string, category: string, sku: string): string | null {
@@ -167,22 +185,50 @@ export class FacebookCopyAgent {
     if (!/\b(?:confira|conheça|conheca|veja|descubra|saiba mais)\b/i.test(content)) return null;
 
     // Hashtags may be separated by newlines (the Facebook activation flow presses
-    // Enter after every hashtag). Strip the entire trailing hashtag block before
-    // rebuilding the canonical final layout.
-    const body = content
-      .split('\n')
-      .map(line => line.trim())
-      .filter(Boolean)
-      .filter(line => !/^(?:#[\p{L}\p{N}_]+\s*)+$/u.test(line))
-      .join('\n')
-      .trim();
+    // Enter after every hashtag). Remove the trailing hashtag block regardless of
+    // whether hashtags are one-per-line or grouped on the same line.
+    const bodyLinesWithoutTags: string[] = [];
+    for (const line of content.split('\n').map(line => line.trim()).filter(Boolean)) {
+      if (/^(?:#[\p{L}\p{N}_]+\s*)+$/u.test(line)) continue;
+      bodyLinesWithoutTags.push(line);
+    }
+
+    const body = bodyLinesWithoutTags.join('\n').trim();
     if (!body || body.includes('#')) return null;
 
-    const final = [body, '@todos', hashtags.join(' ')].filter(Boolean).join('\n\n').trim();
+    const final = [body, '@todos', hashtags.join('\n')].filter(Boolean).join('\n\n').trim();
     if ((final.match(/@todos\b/gi) || []).length !== 1) return null;
     if (/https?:\/\/|www\./i.test(final) || final.length > 700) return null;
 
     return final;
+  }
+
+  private validationReason(raw: string, productName: string, brand: string, category: string, sku: string): string {
+    let content = String(raw || '').replace(/https?:\/\/\S+|www\.\S+/gi, '').replace(/\r/g, '').trim();
+    if (!content) return 'empty';
+    if (/\b(?:system prompt|user prompt|fonte de verdade|regras absolutas|dados reais do produto)\b/i.test(content)) return 'forbidden_meta';
+    if (/(?:^|\n)\s*(?:nome|marca|categoria|sku|produto)\s*:/i.test(content)) return 'metadata_label';
+    const hashtags = content.match(/#[\p{L}\p{N}_]+/gu) || [];
+    if (hashtags.length < 3 || hashtags.length > 6) return `hashtag_count_${hashtags.length}`;
+    if (/\b(?:r\$|rs\$|preço|preco|valor)\s*[:=-]?\s*\d/i.test(content)) return 'price';
+    if (/\b(?:desconto|promoção|promocao|oferta\s+imperdível|imperdível|imperdivel|frete\s+grátis|frete\s+gratis|entrega\s+grátis|entrega\s+gratis)\b/i.test(content)) return 'promotion';
+    if (content.length > 650) return 'too_long';
+    const identityTokens = [productName, brand, category, sku].filter(Boolean);
+    if (!identityTokens.some(v => content.toLowerCase().includes(v.toLowerCase()))) return 'identity_missing';
+    const bodyLines = content.replace(/@todos\b/gi, '').split('\n').map(line => line.trim()).filter(Boolean);
+    const normalizedProductName = this.normalizeSearchText(productName);
+    const firstLineNormalized = this.normalizeSearchText(bodyLines[0]?.replace(/^[🔧🛠️📌⭐]+\s*/, '') || '');
+    if (firstLineNormalized === normalizedProductName || firstLineNormalized.startsWith(normalizedProductName)) return 'title_only';
+    if (/^(?:categoria|sku|marca|produto)\s*:/i.test(bodyLines[0] || '')) return 'metadata_first_line';
+    const sourceNormalized = this.normalizeSearchText(identityTokens.join(' '));
+    for (const tag of hashtags) {
+      const token = this.normalizeSearchText(tag.slice(1));
+      if (!token || !sourceNormalized.includes(token)) return `hashtag_not_derived:${tag}`;
+    }
+    if (!/\b(?:confira|conheça|conheca|veja|descubra|saiba mais)\b/i.test(content)) return 'cta_missing';
+    const body = content.split('\n').map(line => line.trim()).filter(Boolean).filter(line => !/^(?:#[\p{L}\p{N}_]+\s*)+$/u.test(line)).join('\n').trim();
+    if (!body || body.includes('#')) return 'hashtags_inside_body';
+    return 'unknown';
   }
 
   private normalizeSearchText(value: string): string {
