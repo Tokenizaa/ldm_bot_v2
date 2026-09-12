@@ -29,6 +29,10 @@ export class ContentService {
     return { content: safe, affiliateUrl };
   }
 
+  isPublicationCopySafe(product: Product, content: string): boolean {
+    return this.copyAgent.isPublicationReady(content, product);
+  }
+
   /**
    * Reuses a persisted copy only when it passes the canonical publication gate.
    * Invalid legacy rows are regenerated through the same deterministic safety path.
