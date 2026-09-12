@@ -32,6 +32,10 @@ export class SchedulerService {
   private schedulerLock: Promise<void> = Promise.resolve();
   private lastScheduleOperationAt = 0;
   private readonly minScheduleGapMs = 15000;
+  private lastPlannerReconciliationAt = 0;
+  private readonly plannerReconciliationTtlMs = 10 * 60 * 1000;
+  private readonly plannerReconciliationHorizonMs = 48 * 60 * 60 * 1000;
+  private readonly plannerReconciliationMaxItems = 10;
 
   private async waitForSchedulePacing(): Promise<void> {
     const elapsed = Date.now() - this.lastScheduleOperationAt;
@@ -74,6 +78,73 @@ export class SchedulerService {
     }
   }
 
+  private async reconcileNearTermScheduledPublications(
+    all: Publication[],
+    settings: Awaited<ReturnType<typeof storage.getSettings>>,
+    nowMs: number
+  ): Promise<void> {
+    if (nowMs - this.lastPlannerReconciliationAt < this.plannerReconciliationTtlMs) {
+      logger.scheduler('PLANNER_RECONCILIATION_DEFERRED verificação periódica ainda dentro do TTL');
+      return;
+    }
+
+    const candidates = all
+      .filter(p => p.status === 'scheduled' && new Date(p.scheduled_at).getTime() > nowMs)
+      .filter(p => new Date(p.scheduled_at).getTime() <= nowMs + this.plannerReconciliationHorizonMs)
+      .sort((a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime())
+      .slice(0, this.plannerReconciliationMaxItems);
+
+    if (!candidates.length) {
+      this.lastPlannerReconciliationAt = nowMs;
+      logger.scheduler('PLANNER_RECONCILIATION_SKIP nenhum agendamento próximo para verificar');
+      return;
+    }
+
+    this.lastPlannerReconciliationAt = nowMs;
+    logger.scheduler(`PLANNER_RECONCILIATION_START count=\${candidates.length}`);
+    const groupUrl = normalizeGroupUrl(settings.facebook_group_url);
+
+    for (const pub of candidates) {
+      if (!pub.product) continue;
+      const scheduledDate = new Date(pub.scheduled_at);
+      const date = localDateString(scheduledDate);
+      const time = new Intl.DateTimeFormat('en-GB', {
+        timeZone: TIME_ZONE,
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false
+      }).format(scheduledDate);
+
+      try {
+        const check = await facebookAutomation.checkScheduledPost(
+          groupUrl,
+          pub.content,
+          date,
+          time,
+          pub.product.product_name
+        );
+
+        if (check.verified && !check.found) {
+          logger.scheduler(
+            `PLANNER_RECONCILIATION_MISSING id=\${pub.id} slot=\${date}T\${time} DB=scheduled Facebook=absent; resetando para draft`,
+            'warn'
+          );
+          await storage.updatePublication(pub.id, {
+            status: 'draft',
+            error_message: 'Agendamento não encontrado no planner Facebook; liberado para recriação segura.',
+            planner_url: undefined
+          });
+        } else if (check.found) {
+          logger.scheduler(`PLANNER_RECONCILIATION_OK id=\${pub.id} slot=\${date}T\${time}`);
+        } else {
+          logger.scheduler(`PLANNER_RECONCILIATION_UNVERIFIED id=\${pub.id} slot=\${date}T\${time}; mantendo status scheduled`, 'warn');
+        }
+      } catch (err: any) {
+        logger.scheduler(`PLANNER_RECONCILIATION_ERROR id=\${pub.id}: \${err.message}`, 'warn');
+      }
+    }
+  }
+
   async ensureMonthlySchedule(targetDateStr?: string): Promise<{ scheduled: Publication[]; quota: OperationalQuota; message: string }> {
     return this.withSchedulerLock('batch-today', async () => {
       const settings = await storage.getSettings();
@@ -85,7 +156,13 @@ export class SchedulerService {
       const all = await storage.getPublications();
       logger.scheduler(`MONTHLY_SCAN month=${monthPrefix} localNow=${localDateString(now)}`);
 
-      const confirmed = all.filter(p => (CONFIRMED_STATUSES as readonly string[]).includes(p.status) && !p.error_message && (p.published_at || p.scheduled_at));
+      // Facebook is the external source of truth for native scheduled posts.
+      // Reconcile only a small near-term window and only every 10 minutes.
+      // This catches manual deletions without scanning the whole monthly planner.
+      await this.reconcileNearTermScheduledPublications(all, settings, now.getTime());
+
+      const refreshedAll = await storage.getPublications();
+      const confirmed = refreshedAll.filter(p => (CONFIRMED_STATUSES as readonly string[]).includes(p.status) && !p.error_message && (p.published_at || p.scheduled_at));
       const reservedMonth = confirmed.filter(p => {
         const ref = p.published_at || p.scheduled_at || '';
         return ref.startsWith(monthPrefix) || localDateString(new Date(ref)).startsWith(monthPrefix);
@@ -94,7 +171,7 @@ export class SchedulerService {
       if (reservedMonth >= settings.monthly_limit) {
         return {
           scheduled: [],
-          quota: await storage.getQuota(all, settings),
+          quota: await storage.getQuota(refreshedAll, settings),
           message: `Meta mensal já preenchida (${reservedMonth}/${settings.monthly_limit}).`
         };
       }
@@ -103,7 +180,7 @@ export class SchedulerService {
       const usedProducts = new Set(confirmed.map(p => p.product_id));
       const usedSlots = new Set(confirmed.filter(p => localDateString(new Date(p.scheduled_at)).startsWith(monthPrefix)).map(p => normalizeScheduledAt(p.scheduled_at)));
       const existingByKey = new Map<string, Publication>();
-      for (const publication of all) {
+      for (const publication of refreshedAll) {
         const key = calculatePublicationIdempotencyKey(
           publication.product_id,
           publication.facebook_group_url || settings.facebook_group_url,
