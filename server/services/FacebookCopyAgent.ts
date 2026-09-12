@@ -39,9 +39,10 @@ export class FacebookCopyAgent {
       'O nome pode conter especificações técnicas reais; preserve-as quando forem úteis.',
       'Não invente características, benefícios, usos, avaliações, estoque, frete, garantia, urgência, preço, desconto ou promoção.',
       'Não escreva URL; o link será inserido separadamente pelo publicador.',
-      'Escreva uma copy comercial natural, com SEO semântico e mais contexto do que apenas repetir o título.',
+      'Escreva uma copy comercial natural, curta e útil para busca no Facebook, com 2 a 3 frases de contexto além do título.',
+      'A copy deve explicar claramente o que é o produto usando somente termos e especificações presentes nos dados fornecidos; não apenas repetir o nome.',
       'Inclua @todos exatamente uma vez em uma linha própria.',
-      'Use de 3 a 4 hashtags SEO semanticamente derivadas do nome, marca ou categoria.',
+      'Use de 4 a 6 hashtags SEO semanticamente derivadas do nome, marca ou categoria.'
       'Hashtags compostas são permitidas quando formadas por palavras existentes no produto, por exemplo #CaboDeVela a partir de "Cabo de Vela".',
       'Finalize com uma CTA factual para conhecer ou conferir o produto, sem prometer oferta, desconto ou preço.'
     ].join('\n');
@@ -146,7 +147,7 @@ export class FacebookCopyAgent {
     if (!content) return null;
 
     const hashtags = content.match(/#[\p{L}\p{N}_]+/gu) || [];
-    if (hashtags.length > 4) return null;
+    if (hashtags.length < 3 || hashtags.length > 6) return null;
     if (/\b(?:r\$|rs\$|preço|preco|valor)\s*[:=-]?\s*\d/i.test(content)) return null;
     if (/\b(?:desconto|promoção|promocao|oferta\s+imperdível|imperdível|imperdivel|frete\s+grátis|frete\s+gratis|entrega\s+grátis|entrega\s+gratis)\b/i.test(content)) return null;
     if (content.length > 650) return null;
@@ -191,20 +192,33 @@ export class FacebookCopyAgent {
     sku: string
   ): string {
     const identity = [productName, brand].filter(Boolean).join(' — ');
-    const seoSentence = [
-      'Conheça',
-      identity || productName,
-      category ? 'na categoria ' + category : '',
-      sku && !productName.toLowerCase().includes(sku.toLowerCase()) ? 'referência ' + sku : ''
-    ].filter(Boolean).join(' ') + '.';
+    const searchPhrase = this.semanticSearchPhrase(productName);
+    const context = [
+      searchPhrase ? 'Para quem procura ' + searchPhrase + ', esta é uma referência da Loja do Mecânico.' : 'Confira esta referência da Loja do Mecânico.',
+      category ? 'Categoria: ' + category + '.' : '',
+      brand ? 'Marca: ' + brand + (sku ? ' | SKU: ' + sku + '.' : '.') : (sku ? 'SKU: ' + sku + '.' : ''),
+      'Veja os detalhes do produto no link.'
+    ].filter(Boolean).join(' ');
 
     return [
       '🔧 ' + identity,
-      seoSentence,
-      'Confira o produto e veja todos os detalhes.',
+      context,
       '@todos',
       this.buildHashtags(productName, brand, category).join(' ')
     ].filter(Boolean).join('\n\n');
+  }
+
+  private semanticSearchPhrase(productName: string): string {
+    const words = productName
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-zA-Z0-9]+/g, ' ')
+      .split(/\s+/)
+      .filter(Boolean);
+
+    const stop = new Set(['de', 'da', 'do', 'das', 'dos', 'para', 'com', 'em', 'e', 'um', 'uma', 'por']);
+    const useful = words.filter(w => w.length >= 3 && !stop.has(w.toLowerCase()));
+    return useful.slice(0, 5).join(' ');
   }
 
   private buildHashtags(productName: string, brand: string, category: string): string[] {
@@ -235,10 +249,10 @@ export class FacebookCopyAgent {
       if (!tags.some(existing => existing.toLowerCase() === tag.toLowerCase())) tags.push(tag);
     };
 
-    // Build semantic phrases by skipping stop words between meaningful terms.
-    // Example: "Testador para Cabo de Vela" -> #TestadorCaboVela and #CaboVela.
-    for (let i = 0; i < significant.length && tags.length < 2; i++) {
-      const phrase = significant.slice(i, i + 3);
+    // Build several semantic phrases from the product wording.
+    // Example: "Teste de Arrefecimento com 9 Peças" -> #TesteArrefecimento and #ArrefecimentoPecas.
+    for (let i = 0; i < significant.length && tags.length < 3; i++) {
+      const phrase = significant.slice(i, i + 2);
       if (phrase.length >= 2) add(phrase.map(this.toTagWord).join(''));
     }
 
