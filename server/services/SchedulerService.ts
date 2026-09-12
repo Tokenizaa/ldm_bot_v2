@@ -317,11 +317,17 @@ export class SchedulerService {
       logger.scheduler('COPY_REPAIRED id=' + pub.id + ' product=' + pub.product_id, 'warn');
       const updated = await storage.updatePublication(pub.id, {
         content: safeCopy.content.trim(),
-        error_message: undefined
+        error_message: undefined,
+        attempts: 0,
+        status: 'draft'
       });
       if (!updated) throw new Error('FACEBOOK_COPY_REPAIR_PERSIST_FAILED');
     }
     pub.content = safeCopy.content.trim();
+    if (safeCopy.content.trim() !== (pub.content || '').trim()) {
+      pub.attempts = 0;
+      pub.status = 'draft';
+    }
     if (!contentService.isPublicationCopySafe(pub.product, pub.content)) {
       throw new Error('FACEBOOK_COPY_SAFETY_GATE_FAILED');
     }
