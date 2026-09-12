@@ -167,7 +167,10 @@ export class FacebookCopyAgent {
     const firstLineNormalized = this.normalizeSearchText(
       bodyLines[0]?.replace(/^[🔧🛠️📌⭐]+\s*/, '') || ''
     );
-    if (firstLineNormalized === normalizedProductName) return null;
+    if (
+      firstLineNormalized === normalizedProductName ||
+      firstLineNormalized.startsWith(normalizedProductName)
+    ) return null;
     if (/^(?:categoria|sku|marca|produto)\s*:/i.test(bodyLines[0] || '')) return null;
 
     const sourceNormalized = this.normalizeSearchText(identityTokens.join(' '));
