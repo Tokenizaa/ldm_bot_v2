@@ -121,13 +121,7 @@ export class FacebookCopyAgent {
     return normalized || this.buildDeterministicCopy(productName, brand, category, sku);
   }
 
-  private normalizeAndValidate(
-    raw: string,
-    productName: string,
-    brand: string,
-    category: string,
-    sku: string
-  ): string | null {
+  private normalizeAndValidate(raw: string, productName: string, brand: string, category: string, sku: string): string | null {
     let content = String(raw || '')
       .replace(/https?:\/\/\S+|www\.\S+/gi, '')
       .replace(/\r/g, '')
@@ -160,17 +154,10 @@ export class FacebookCopyAgent {
     const identityTokens = [productName, brand, category, sku].filter(Boolean);
     if (!identityTokens.some(v => content.toLowerCase().includes(v.toLowerCase()))) return null;
 
-    // Never accept a catalog-style title as the copy. The product identity must
-    // appear naturally inside the body, not as a standalone heading.
     const bodyLines = content.split('\n').map(line => line.trim()).filter(Boolean);
     const normalizedProductName = this.normalizeSearchText(productName);
-    const firstLineNormalized = this.normalizeSearchText(
-      bodyLines[0]?.replace(/^[🔧🛠️📌⭐]+\s*/, '') || ''
-    );
-    if (
-      firstLineNormalized === normalizedProductName ||
-      firstLineNormalized.startsWith(normalizedProductName)
-    ) return null;
+    const firstLineNormalized = this.normalizeSearchText(bodyLines[0]?.replace(/^[🔧🛠️📌⭐]+\s*/, '') || '');
+    if (firstLineNormalized === normalizedProductName || firstLineNormalized.startsWith(normalizedProductName)) return null;
     if (/^(?:categoria|sku|marca|produto)\s*:/i.test(bodyLines[0] || '')) return null;
 
     const sourceNormalized = this.normalizeSearchText(identityTokens.join(' '));
@@ -192,24 +179,10 @@ export class FacebookCopyAgent {
   }
 
   private normalizeSearchText(value: string): string {
-    return String(value || '')
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .replace(/[^a-zA-Z0-9]+/g, '')
-      .toLowerCase();
+    return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9]+/g, '').toLowerCase();
   }
 
-  /**
-   * Deterministic fallback must still be a real sales copy.
-   * It deliberately omits catalog metadata (SKU/category labels) and avoids
-   * using the raw product title as a standalone heading.
-   */
-  private buildDeterministicCopy(
-    productName: string,
-    brand: string,
-    category: string,
-    _sku: string
-  ): string {
+  private buildDeterministicCopy(productName: string, brand: string, category: string, _sku: string): string {
     const searchPhrase = this.semanticSearchPhrase(productName);
     const brandPhrase = brand ? ' Da marca ' + brand + ',' : '';
     const categoryPhrase = category ? ' dentro da linha de ' + category.toLowerCase() : '';
@@ -224,21 +197,11 @@ export class FacebookCopyAgent {
       'Confira os detalhes e especificações do produto antes de escolher.'
     ];
 
-    return [
-      sentences.join(' '),
-      '@todos',
-      this.buildHashtags(productName, brand, category).join('\\n')
-    ].filter(Boolean).join('\n\n');
+    return [sentences.join(' '), '@todos', this.buildHashtags(productName, brand, category).join('\n')].filter(Boolean).join('\n\n');
   }
 
   private semanticSearchPhrase(productName: string): string {
-    const words = productName
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .replace(/[^a-zA-Z0-9]+/g, ' ')
-      .split(/\s+/)
-      .filter(Boolean);
-
+    const words = productName.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9]+/g, ' ').split(/\s+/).filter(Boolean);
     const stop = new Set(['de', 'da', 'do', 'das', 'dos', 'para', 'com', 'em', 'e', 'um', 'uma', 'por']);
     const useful = words.filter(w => w.length >= 3 && !stop.has(w.toLowerCase()));
     return useful.slice(0, 5).join(' ');
@@ -246,24 +209,9 @@ export class FacebookCopyAgent {
 
   private buildHashtags(productName: string, brand: string, category: string): string[] {
     const source = [productName, brand, category].filter(Boolean).join(' ');
-    const words = source
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .replace(/[^a-zA-Z0-9]+/g, ' ')
-      .split(/\s+/)
-      .filter(Boolean);
-
-    const stop = new Set([
-      'de', 'da', 'do', 'das', 'dos', 'para', 'com', 'em', 'e',
-      'um', 'uma', 'por', 'tipo', 'pol', 'mm', 'cm', 'm', 'v', 'w',
-      'entrega', 'frete', 'gratis', 'brasil', 'a', 'o', 'as', 'os'
-    ]);
-
-    const significant = words.filter(word =>
-      word.length >= 3 &&
-      !stop.has(word.toLowerCase()) &&
-      !/^\d+(?:[.,]\d+)?$/.test(word)
-    );
+    const words = source.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9]+/g, ' ').split(/\s+/).filter(Boolean);
+    const stop = new Set(['de', 'da', 'do', 'das', 'dos', 'para', 'com', 'em', 'e', 'um', 'uma', 'por', 'tipo', 'pol', 'mm', 'cm', 'm', 'v', 'w', 'entrega', 'frete', 'gratis', 'brasil', 'a', 'o', 'as', 'os']);
+    const significant = words.filter(word => word.length >= 3 && !stop.has(word.toLowerCase()) && !/^\d+(?:[.,]\d+)?$/.test(word));
 
     const tags: string[] = [];
     const add = (value: string) => {
@@ -272,30 +220,18 @@ export class FacebookCopyAgent {
       if (!tags.some(existing => existing.toLowerCase() === tag.toLowerCase())) tags.push(tag);
     };
 
-    // Prefer short, directly searchable phrases from adjacent product words.
-    // Every generated hashtag must be made exclusively from words present in the source.
     for (let i = 0; i < significant.length && tags.length < 3; i++) {
       const phrase = significant.slice(i, i + 2);
       if (phrase.length >= 2) add(phrase.map(this.toTagWord).join(''));
     }
 
     if (brand) {
-      const brandWords = brand
-        .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '')
-        .replace(/[^a-zA-Z0-9]+/g, ' ')
-        .split(/\s+/)
-        .filter(Boolean);
+      const brandWords = brand.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9]+/g, ' ').split(/\s+/).filter(Boolean);
       add(brandWords.map(this.toTagWord).join(''));
     }
 
     if (category) {
-      const categoryWords = category
-        .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '')
-        .replace(/[^a-zA-Z0-9]+/g, ' ')
-        .split(/\s+/)
-        .filter(Boolean);
+      const categoryWords = category.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9]+/g, ' ').split(/\s+/).filter(Boolean);
       add(categoryWords.map(this.toTagWord).join(''));
     }
 
