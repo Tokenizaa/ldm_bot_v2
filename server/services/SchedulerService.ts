@@ -47,10 +47,6 @@ export class SchedulerService {
     this.lastScheduleOperationAt = Date.now();
   }
 
-  /**
-   * Serializes calls locally and acquires the database-level distributed lock
-   * across multiple processes and containers via Supabase `system_config`.
-   */
   private async withSchedulerLock<T>(operationName: string, operation: () => Promise<T>): Promise<T> {
     const previous = this.schedulerLock;
     let release!: () => void;
@@ -124,9 +120,9 @@ export class SchedulerService {
           pub.product.product_name
         );
 
-        if (check.verified && !check.found) {
+        if (!check.found) {
           logger.scheduler(
-            `PLANNER_RECONCILIATION_MISSING id=\${pub.id} slot=\${date}T\${time} DB=scheduled Facebook=absent; resetando para draft`,
+            `PLANNER_RECONCILIATION_MISSING id=${pub.id} slot=${date}T${time} DB=scheduled Facebook=absent; resetando para draft`,
             'warn'
           );
           await storage.updatePublication(pub.id, {
@@ -134,13 +130,11 @@ export class SchedulerService {
             error_message: 'Agendamento não encontrado no planner Facebook; liberado para recriação segura.',
             planner_url: undefined
           });
-        } else if (check.found) {
-          logger.scheduler(`PLANNER_RECONCILIATION_OK id=\${pub.id} slot=\${date}T\${time}`);
         } else {
-          logger.scheduler(`PLANNER_RECONCILIATION_UNVERIFIED id=\${pub.id} slot=\${date}T\${time}; mantendo status scheduled`, 'warn');
+          logger.scheduler(`PLANNER_RECONCILIATION_OK id=${pub.id} slot=${date}T${time}`);
         }
       } catch (err: any) {
-        logger.scheduler(`PLANNER_RECONCILIATION_ERROR id=\${pub.id}: \${err.message}`, 'warn');
+        logger.scheduler(`PLANNER_RECONCILIATION_ERROR id=${pub.id}: ${err.message}`, 'warn');
       }
     }
   }
@@ -156,13 +150,14 @@ export class SchedulerService {
       const all = await storage.getPublications();
       logger.scheduler(`MONTHLY_SCAN month=${monthPrefix} localNow=${localDateString(now)}`);
 
-      // Facebook is the external source of truth for native scheduled posts.
-      // Reconcile only a small near-term window and only every 10 minutes.
-      // This catches manual deletions without scanning the whole monthly planner.
       await this.reconcileNearTermScheduledPublications(all, settings, now.getTime());
 
       const refreshedAll = await storage.getPublications();
-      const confirmed = refreshedAll.filter(p => (CONFIRMED_STATUSES as readonly string[]).includes(p.status) && !p.error_message && (p.published_at || p.scheduled_at));
+      const confirmed = refreshedAll.filter(p =>
+        (CONFIRMED_STATUSES as readonly string[]).includes(p.status) &&
+        !p.error_message &&
+        (p.published_at || p.scheduled_at)
+      );
       const reservedMonth = confirmed.filter(p => {
         const ref = p.published_at || p.scheduled_at || '';
         return ref.startsWith(monthPrefix) || localDateString(new Date(ref)).startsWith(monthPrefix);
@@ -178,7 +173,11 @@ export class SchedulerService {
 
       const hours = settings.daily_hours?.length ? settings.daily_hours : DEFAULT_HOURS;
       const usedProducts = new Set(confirmed.map(p => p.product_id));
-      const usedSlots = new Set(confirmed.filter(p => localDateString(new Date(p.scheduled_at)).startsWith(monthPrefix)).map(p => normalizeScheduledAt(p.scheduled_at)));
+      const usedSlots = new Set(
+        confirmed
+          .filter(p => localDateString(new Date(p.scheduled_at)).startsWith(monthPrefix))
+          .map(p => normalizeScheduledAt(p.scheduled_at))
+      );
       const existingByKey = new Map<string, Publication>();
       for (const publication of refreshedAll) {
         const key = calculatePublicationIdempotencyKey(
@@ -196,8 +195,7 @@ export class SchedulerService {
         Boolean(p.product_name) &&
         /^https?:\/\//i.test(p.original_url) &&
         /^https?:\/\//i.test(p.affiliate_url) &&
-        p.affiliate_url.includes('/20889') &&
-        true // Copy is generated/repaired by the canonical FacebookCopyAgent.
+        p.affiliate_url.includes('/20889')
       );
 
       if (!candidates.length) {
@@ -217,12 +215,9 @@ export class SchedulerService {
           const totalConfirmedThisMonth = reservedMonth + scheduled.filter(p => p.status === 'scheduled').length;
           if (totalConfirmedThisMonth >= settings.monthly_limit) break outer;
 
-          // Strict daily limit check accounting for confirmed + already scheduled in this run
           const confirmedToday = confirmed.filter(c => localDateString(new Date(c.published_at || c.scheduled_at)) === date).length;
           const scheduledToday = scheduled.filter(s => s.status === 'scheduled' && localDateString(new Date(s.scheduled_at)) === date).length;
-          if (confirmedToday + scheduledToday >= settings.daily_limit) {
-            break; // Skip rest of day slots
-          }
+          if (confirmedToday + scheduledToday >= settings.daily_limit) break;
 
           const slotIso = localIso(date, time);
           if (new Date(slotIso).getTime() <= Date.now() || usedSlots.has(slotIso)) continue;
@@ -246,11 +241,13 @@ export class SchedulerService {
             }
             if (!['draft', 'failed', 'unknown'].includes(publication.status)) continue;
           } else {
+            // Create the queue row without assuming a legacy facebook_copy exists.
+            // schedulePublication() performs the canonical copy generation/validation.
             publication = await storage.createPublication({
               product_id: product.id,
               scheduled_at: slotIso,
               status: 'draft',
-              content: product.facebook_copy!.trim(),
+              content: '',
               facebook_group_url: normalizeGroupUrl(settings.facebook_group_url)
             });
             existingByKey.set(key, publication);
@@ -306,17 +303,16 @@ export class SchedulerService {
       throw new Error('Produto sem link afiliado /20889 válido.');
     }
 
-    // The database copy is legacy/untrusted input. Always pass it through the canonical
-    // copy gate before touching Facebook. This repairs old prompt dumps and malformed
-    // copies that the previous narrow detector could not recognize.
     const safeCopy = await contentService.ensureCopyForPublication(pub.product, pub.content);
-    if (!safeCopy.content?.trim()) throw new Error('FACEBOOK_COPY_REGENERATION_FAILED');
+    const content = safeCopy.content?.trim();
+    if (!content) throw new Error('FACEBOOK_COPY_REGENERATION_FAILED');
+
     const previousCopy = (pub.content || '').trim();
-    const repaired = safeCopy.content.trim() !== previousCopy;
+    const repaired = content !== previousCopy;
     if (repaired) {
-      logger.scheduler('COPY_REPAIRED id=' + pub.id + ' product=' + pub.product_id, 'warn');
+      logger.scheduler(`COPY_REPAIRED id=${pub.id} product=${pub.product_id}`, 'warn');
       const updated = await storage.updatePublication(pub.id, {
-        content: safeCopy.content.trim(),
+        content,
         error_message: undefined,
         attempts: 0,
         status: 'draft'
@@ -325,10 +321,12 @@ export class SchedulerService {
       pub.attempts = 0;
       pub.status = 'draft';
     }
-    pub.content = safeCopy.content.trim();
+
+    pub.content = content;
     if (!contentService.isPublicationCopySafe(pub.product, pub.content)) {
       throw new Error('FACEBOOK_COPY_SAFETY_GATE_FAILED');
     }
+
     const scheduledDate = new Date(pub.scheduled_at);
     if (Number.isNaN(scheduledDate.getTime()) || scheduledDate.getTime() <= Date.now()) {
       throw new Error('Escolha uma data/hora futura para programar.');
@@ -343,7 +341,6 @@ export class SchedulerService {
       hour12: false
     }).format(scheduledDate);
 
-    // If publication status is 'unknown', check if Facebook actually scheduled it before resubmitting to prevent duplicates
     if (pub.status === 'unknown') {
       logger.scheduler(`UNKNOWN_PRE_CHECK id=${pub.id} Verificando planner antes de qualquer tentativa.`);
       const groupUrl = normalizeGroupUrl(pub.facebook_group_url || settings.facebook_group_url);
@@ -372,7 +369,6 @@ export class SchedulerService {
     }
     const attempts = currentAttempts + 1;
 
-    // Transition state to 'attempting' before initiating browser action
     await storage.updatePublication(pub.id, {
       status: 'attempting',
       attempts,
@@ -394,7 +390,6 @@ export class SchedulerService {
       sku: pub.product.sku
     });
 
-    // 1. Definite Success
     if (result.success) {
       logger.scheduler(`FACEBOOK_SCHEDULE_CONFIRMED id=${pub.id} planner=${result.plannerUrl || 'verified'}`, 'success');
       return storage.updatePublication(pub.id, {
@@ -407,7 +402,6 @@ export class SchedulerService {
       });
     }
 
-    // 2. Uncertain Confirmation (Action was submitted to Facebook, but verification was not confirmed in planner)
     if (result.uncertain || result.submitted) {
       logger.scheduler(`FACEBOOK_SCHEDULE_UNCERTAIN id=${pub.id} err=${result.error}`, 'warn');
       return storage.updatePublication(pub.id, {
@@ -419,7 +413,6 @@ export class SchedulerService {
       });
     }
 
-    // 3. Definite Failure before click "Programar"
     const backoffMinutes = Math.min(120, Math.pow(2, attempts) * 5);
     const nextAttemptAt = attempts < maxAttempts ? new Date(Date.now() + backoffMinutes * 60000).toISOString() : undefined;
 
@@ -437,7 +430,6 @@ export class SchedulerService {
       const now = Date.now();
       const settings = await storage.getSettings();
 
-      // Check 'unknown' publications first by inspecting the planner
       const allUnknown = await storage.getPublications('unknown');
       for (const pub of allUnknown) {
         if (!pub.product) continue;
@@ -467,7 +459,6 @@ export class SchedulerService {
         }
       }
 
-      // Check failed publications due for retry
       const due = (await storage.getPublications('failed')).filter(p =>
         p.next_attempt_at &&
         new Date(p.next_attempt_at).getTime() <= now &&
@@ -483,11 +474,6 @@ export class SchedulerService {
     });
   }
 
-  /**
-   * Directly audits and reconciles a publication currently in 'unknown' status.
-   * If found in Facebook planner, updates status to 'scheduled'.
-   * If verified absent, resets status to 'draft' so it can be safely scheduled again.
-   */
   async reconcileUnknownPublication(publicationId: string): Promise<Publication> {
     const pub = await storage.getPublicationById(publicationId);
     if (!pub) throw new Error('Publicação não encontrada.');
@@ -515,14 +501,14 @@ export class SchedulerService {
         planner_url: check.plannerUrl
       });
       return updated || pub;
-    } else {
-      logger.scheduler(`RECONCILE_UNKNOWN_ABSENT id=${pub.id} ausente no planner Facebook; resetado para draft.`, 'warn');
-      const updated = await storage.updatePublication(pub.id, {
-        status: 'draft',
-        error_message: 'Verificado ausente no planner do Facebook. Liberado com segurança para novo agendamento.'
-      });
-      return updated || pub;
     }
+
+    logger.scheduler(`RECONCILE_UNKNOWN_ABSENT id=${pub.id} ausente no planner Facebook; resetado para draft.`, 'warn');
+    const updated = await storage.updatePublication(pub.id, {
+      status: 'draft',
+      error_message: 'Verificado ausente no planner do Facebook. Liberado com segurança para novo agendamento.'
+    });
+    return updated || pub;
   }
 
   async publishNow(_publicationId: string): Promise<Publication | undefined> {
