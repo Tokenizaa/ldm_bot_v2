@@ -25,7 +25,21 @@ export class ContentService {
       throw new Error(result.error || 'Agente de Copy não conseguiu gerar a publicação.');
     }
 
-    return { content: result.content, affiliateUrl };
+    const safe = await this.copyAgent.ensurePublicationCopy(product, result.content, customModel);
+    return { content: safe, affiliateUrl };
+  }
+
+  /**
+   * Reuses a persisted copy only when it passes the canonical publication gate.
+   * Invalid legacy rows are regenerated through the same deterministic safety path.
+   */
+  async ensureCopyForPublication(product: Product, existingCopy?: string, customModel?: string): Promise<GeneratedProductCopy> {
+    const affiliateUrl = buildAffiliateUrl(product.affiliate_url || product.original_url);
+    if (!affiliateUrl.endsWith('/20889')) {
+      throw new Error('URL de afiliado inválida: ' + affiliateUrl);
+    }
+    const content = await this.copyAgent.ensurePublicationCopy(product, existingCopy, customModel);
+    return { content, affiliateUrl };
   }
 }
 
