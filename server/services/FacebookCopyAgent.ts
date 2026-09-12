@@ -195,9 +195,9 @@ export class FacebookCopyAgent {
     const searchPhrase = this.semanticSearchPhrase(productName);
     const context = [
       searchPhrase ? 'Para quem procura ' + searchPhrase + ', esta é uma referência da Loja do Mecânico.' : 'Confira esta referência da Loja do Mecânico.',
-      category ? 'Categoria: ' + category + '.' : '',
-      brand ? 'Marca: ' + brand + (sku ? ' | SKU: ' + sku + '.' : '.') : (sku ? 'SKU: ' + sku + '.' : ''),
-      'Veja os detalhes do produto no link.'
+      category ? 'Está na categoria ' + category + '.' : '',
+      brand ? 'Da marca ' + brand + (sku ? ', referência ' + sku + '.' : '.') : (sku ? 'Referência ' + sku + '.' : ''),
+      'Veja os detalhes e especificações disponíveis no link.'
     ].filter(Boolean).join(' ');
 
     return [
