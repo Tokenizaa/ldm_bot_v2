@@ -125,7 +125,7 @@ export class FacebookCopyAgent {
    */
   async ensurePublicationCopy(product: Product, existingCopy?: string, customModel?: string): Promise<string> {
     if (existingCopy && this.isPublicationReady(existingCopy, product)) {
-      return this.normalizeStoredCopy(existingCopy);
+      return this.normalizeAndValidate(existingCopy, this.cleanProductName(product.product_name), this.cleanField(product.brand), this.cleanField(product.category), this.cleanField(product.sku))!;
     }
 
     const generated = await this.generate(product, customModel);
@@ -139,15 +139,7 @@ export class FacebookCopyAgent {
         this.cleanField(product.sku)
       );
     }
-    return this.normalizeStoredCopy(generated.content);
-  }
-
-  private normalizeStoredCopy(raw: string): string {
-    const content = String(raw || '').replace(/\\r/g, '').trim();
-    const lines = content.split('\\n').map(line => line.trim()).filter(Boolean);
-    const withoutTrailingTags = lines.filter(line => !/^#\\w+(?:\\s+#\\w+)*$/u.test(line));
-    const tags = (content.match(/#\\w+/g) || []).slice(0, 4);
-    return [withoutTrailingTags.join('\\n'), '@todos', tags.join(' ')].filter(Boolean).join('\\n\\n').trim();
+    return this.normalizeAndValidate(generated.content, this.cleanProductName(product.product_name), this.cleanField(product.brand), this.cleanField(product.category), this.cleanField(product.sku)) || this.buildDeterministicCopy(this.cleanProductName(product.product_name), this.cleanField(product.brand), this.cleanField(product.category), this.cleanField(product.sku));
   }
 
   /**
