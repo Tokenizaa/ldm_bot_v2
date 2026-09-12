@@ -48,7 +48,7 @@ export class FacebookCopyAgent {
       '- Não invente urgência, escassez, desconto ou benefício.',
       '- Entregue somente a copy final pronta para publicação.',
       '',
-      'O link de afiliado será inserido separadamente pelo publicador apenas para gerar o preview Open Graph e depois poderá ser removido do texto. Ele NÃO pertence à copy.'
+      'O link de afiliado será inserido separadamente pelo publicador. A copy NÃO deve gerar a URL; o publicador adicionará a URL ao final da publicação para manter o link clicável e gerar o preview Open Graph.'
     ].join('\n');
 
     // Product names scraped from commerce pages can contain merchandising suffixes
