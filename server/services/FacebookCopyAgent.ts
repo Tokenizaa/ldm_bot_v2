@@ -39,8 +39,10 @@ export class FacebookCopyAgent {
       'O nome pode conter especificações técnicas reais; preserve-as quando forem úteis.',
       'Não invente características, benefícios, usos, avaliações, estoque, frete, garantia, urgência, preço, desconto ou promoção.',
       'Não escreva URL; o link será inserido separadamente pelo publicador.',
-      'Escreva uma copy comercial natural, curta e útil para busca no Facebook, com 2 a 3 frases de contexto além do título.',
-      'A copy deve explicar claramente o que é o produto usando somente termos e especificações presentes nos dados fornecidos; não apenas repetir o nome.',
+      'Escreva uma copy comercial natural, curta e útil para busca no Facebook, com 2 a 4 frases de contexto além do título.',
+      'A copy NÃO pode ser apenas uma repetição do nome. Transforme as informações técnicas do próprio nome em contexto útil: tipo de ferramenta, medida, tensão, potência, quantidade de peças, aplicação indicada pelo nome e demais especificações explicitamente presentes.',
+      'Quando o nome trouxer várias especificações, distribua essas informações naturalmente nas frases, sem criar características novas.',
+      'Evite frases genéricas como "confira este produto" como único conteúdo. O leitor deve entender pelo texto o que está sendo anunciado e quais são seus principais atributos disponíveis no nome.',
       'Inclua @todos exatamente uma vez em uma linha própria.',
       'Use de 4 a 6 hashtags SEO semanticamente derivadas do nome, marca ou categoria.'
       'Hashtags compostas são permitidas quando formadas por palavras existentes no produto, por exemplo #CaboDeVela a partir de "Cabo de Vela".',
@@ -48,7 +50,7 @@ export class FacebookCopyAgent {
     ].join('\n');
 
     const userPrompt = [
-      'DADOS DO PRODUTO — NÃO COPIAR ESTES RÓTULOS PARA A PUBLICAÇÃO',
+      'DADOS DO PRODUTO — USE TODOS OS DADOS RELEVANTES; NÃO COPIAR ESTES RÓTULOS PARA A PUBLICAÇÃO',
       'Nome: ' + productName,
       'Marca: ' + (brand || 'não informada'),
       'Categoria: ' + (category || 'não informada'),
