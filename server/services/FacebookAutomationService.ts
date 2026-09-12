@@ -181,7 +181,7 @@ private editor(page: Page): Locator {
 
     // Single-pass composition: fill() + clear + refill caused the copy to visibly
     // appear twice and increased UI churn. Type the final content exactly once,
-    // inserting a real Space after @todos and every hashtag so Facebook can activate
+    // inserting a real Enter after @todos and every hashtag so Facebook can activate
     // the entity/link behavior as it does for a human typist.
     await editor.click();
     await editor.fill('');
@@ -195,7 +195,7 @@ private editor(page: Page): Locator {
       const token = match[0];
       await editor.pressSequentially(token);
       if (token.toLowerCase() === '@todos' || token.startsWith('#')) {
-        await editor.press('Space');
+        await editor.press('Enter');
       }
       last = index + token.length;
     }
@@ -210,7 +210,7 @@ private editor(page: Page): Locator {
     if (!actual?.includes(tokens.mentions[0] || '@todos')) throw new Error('FACEBOOK_MENTION_INPUT_FAILED');
 
     this.log(execId, 'COPY_FILLED', 'chars=' + finalText.length);
-    this.log(execId, 'COPY_ACTIVATE', 'composição única; Space real após @todos e hashtags');
+    this.log(execId, 'COPY_ACTIVATE', 'composição única; Enter real após @todos e cada hashtag');
 
     // Wait only for Facebook's preview state; no second write and no fixed sleep.
     const previewOk = await page.waitForFunction(
@@ -236,7 +236,7 @@ private editor(page: Page): Locator {
       this.log(execId, 'OG_TIMEOUT', 'preview não confirmou em 25s; seguindo mesmo assim', 'warn');
     }
 
-    // Resolve @todos after its trailing Space so the suggestion can become a real
+    // Resolve @todos after its trailing Enter so the suggestion can become a real
     // Facebook mention without rewriting the rest of the copy.
     await this.resolveMentionTypeahead(execId, page);
 
