@@ -44,8 +44,6 @@ export class FacebookCopyAgent {
       'NÃO escreva "Categoria:", "SKU:", "Marca:" ou qualquer outro rótulo de cadastro.',
       'O nome do produto é uma fonte de fatos técnicos. Transforme essas informações em texto de venda natural: explique o que é, para que tipo de tarefa ele serve quando isso estiver claramente indicado pelo nome, e destaque medidas, tensão, potência, quantidade de peças, tipo de teste ou outras especificações explicitamente presentes.',
       'A copy deve parecer escrita por uma pessoa para outro profissional/consumidor, e não por um catálogo. Use o nome e as especificações dentro das frases quando forem relevantes, sem simplesmente copiar o título.',
-      'Não invente características, benefícios, usos, avaliações, estoque, frete, garantia, urgência, preço, desconto ou promoção.',
-      'Não escreva URL; o link será inserido separadamente pelo publicador.',
       'Inclua @todos exatamente uma vez em uma linha própria.',
       'Use de 4 a 6 hashtags SEO semanticamente derivadas do nome, marca ou categoria.',
       'Hashtags compostas são permitidas quando formadas por palavras existentes no produto, por exemplo #CaboDeVela a partir de "Cabo de Vela".',
@@ -168,7 +166,16 @@ export class FacebookCopyAgent {
 
     if (!/\b(?:confira|conheça|conheca|veja|descubra|saiba mais)\b/i.test(content)) return null;
 
-    const body = content.replace(/(?:^|\n)\s*(?:#[\p{L}\p{N}_]+\s*)+$/u, '').trim();
+    // Hashtags may be separated by newlines (the Facebook activation flow presses
+    // Enter after every hashtag). Strip the entire trailing hashtag block before
+    // rebuilding the canonical final layout.
+    const body = content
+      .split('\n')
+      .map(line => line.trim())
+      .filter(Boolean)
+      .filter(line => !/^(?:#[\p{L}\p{N}_]+\s*)+$/u.test(line))
+      .join('\n')
+      .trim();
     if (!body || body.includes('#')) return null;
 
     const final = [body, '@todos', hashtags.join(' ')].filter(Boolean).join('\n\n').trim();
