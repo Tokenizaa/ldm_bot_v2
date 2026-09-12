@@ -30,6 +30,18 @@ const STRUCTURAL_FACEBOOK_ERRORS = new Set([
 
 export class SchedulerService {
   private schedulerLock: Promise<void> = Promise.resolve();
+  private lastScheduleOperationAt = 0;
+  private readonly minScheduleGapMs = 15000;
+
+  private async waitForSchedulePacing(): Promise<void> {
+    const elapsed = Date.now() - this.lastScheduleOperationAt;
+    const remaining = this.minScheduleGapMs - elapsed;
+    if (remaining > 0) {
+      logger.scheduler(`SCHEDULE_PACING_WAIT ms=${remaining}`);
+      await new Promise(resolve => setTimeout(resolve, remaining));
+    }
+    this.lastScheduleOperationAt = Date.now();
+  }
 
   /**
    * Serializes calls locally and acquires the database-level distributed lock
@@ -289,6 +301,8 @@ export class SchedulerService {
     logger.scheduler(`PROGRAM_START id=${pub.id} product=${pub.product_id} date=${date} time=${time} attempt=${attempts}/${maxAttempts}`);
 
     const groupUrl = normalizeGroupUrl(pub.facebook_group_url || settings.facebook_group_url);
+    await this.waitForSchedulePacing();
+
     const result = await facebookAutomation.schedule({
       groupUrl,
       content: pub.content,
