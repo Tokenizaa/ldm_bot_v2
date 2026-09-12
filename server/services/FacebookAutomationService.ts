@@ -12,6 +12,7 @@ export interface FacebookScheduleInput {
   scheduledTime: string;
   productName?: string;
   sku?: string;
+  preCheckPlanner?: boolean;
 }
 
 export interface FacebookScheduleResult {
@@ -33,6 +34,8 @@ export interface FacebookPublishInput {
 
 class FacebookAutomationService {
   private chain: Promise<void> = Promise.resolve();
+  private schedulesSincePlannerVerification = 0;
+  private readonly plannerVerificationInterval = 5;
 
   private async serial<T>(operation: () => Promise<T>): Promise<T> {
     const previous = this.chain;
@@ -465,8 +468,21 @@ private async setDate(execId: string, page: Page, date: string) {
       { timeout: 8000 }
     ).catch(() => undefined);
 
-    // Navigate to scheduled posts planner to verify
+    // The native confirmation is authoritative for most runs. To avoid repeatedly
+    // navigating to /scheduled_posts after every successful schedule, verify the
+    // planner periodically and always keep immediate verification available for
+    // uncertain/unknown states.
     const plannerUrl = groupUrl.replace(/\/+$/, '') + '/scheduled_posts';
+    const shouldVerifyPlanner = ++this.schedulesSincePlannerVerification >= this.plannerVerificationInterval;
+
+    if (!shouldVerifyPlanner) {
+      this.log(execId, 'PLANNER_VERIFY_DEFERRED', `verificação periódica adiada (${this.schedulesSincePlannerVerification}/${this.plannerVerificationInterval})`);
+      return { success: true, plannerUrl, submitted: true };
+    }
+
+    this.schedulesSincePlannerVerification = 0;
+    this.log(execId, 'PLANNER_VERIFY_PERIODIC', 'verificação periódica do planner iniciada');
+
     try {
       const check = await this.checkPostInPlanner(page, groupUrl, content, scheduledDate, scheduledTime, productName);
       this.log(execId, 'PLANNER_VERIFY', `url=${page.url()} found=${check.found}`);
@@ -527,20 +543,24 @@ private async setDate(execId: string, page: Page, date: string) {
         await facebookSession.requireAuthenticated();
         const page = await facebookBrowser.closeExtraPages();
 
-        // 1. Idempotency pre-check: Is it ALREADY in the planner?
-        this.log(execId, 'PRE_CHECK_PLANNER', 'Verificando se publicação já existe em /scheduled_posts');
-        const existingCheck = await this.checkPostInPlanner(page, input.groupUrl, input.content, input.scheduledDate, input.scheduledTime, input.productName);
-        if (existingCheck.found) {
-          this.log(execId, 'ALREADY_SCHEDULED', 'Publicação já confirmada no planner Facebook. Evitando reenvio.', 'success');
-          return {
-            success: true,
-            scheduledAt: target.toISOString(),
-            plannerUrl: existingCheck.plannerUrl,
-            alreadyScheduled: true
-          };
+        // Normal drafts do not need a full planner navigation before every submission.
+        // Unknown states are reconciled by SchedulerService; periodic planner verification
+        // is performed after successful native confirmations.
+        if (input.preCheckPlanner) {
+          this.log(execId, 'PRE_CHECK_PLANNER', 'Verificação explícita do planner solicitada');
+          const existingCheck = await this.checkPostInPlanner(page, input.groupUrl, input.content, input.scheduledDate, input.scheduledTime, input.productName);
+          if (existingCheck.found) {
+            this.log(execId, 'ALREADY_SCHEDULED', 'Publicação já confirmada no planner Facebook. Evitando reenvio.', 'success');
+            return {
+              success: true,
+              scheduledAt: target.toISOString(),
+              plannerUrl: existingCheck.plannerUrl,
+              alreadyScheduled: true
+            };
+          }
         }
 
-        // 2. Main flow: Group -> Composer -> Link Preview -> Schedule -> Date -> Time -> Confirm
+        // Main flow: Group -> Composer -> Link Preview -> Schedule -> Date -> Time -> Confirm
         await this.goToGroup(execId, page, input.groupUrl);
         await this.openComposer(execId, page, input.groupUrl);
         await this.generateLinkPreview(execId, page, input.content, input.affiliateUrl);
