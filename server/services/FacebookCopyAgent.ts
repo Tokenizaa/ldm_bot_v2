@@ -258,7 +258,17 @@ export class FacebookCopyAgent {
       if (candidates.length === 4) break;
     }
 
-    return candidates.length ? candidates : ['#Ferramentas'];
+    if (candidates.length) return candidates;
+
+    // Last resort still derives the tag from the actual product name; never
+    // inject a generic hashtag that is absent from the supplied product data.
+    const fallbackWord = productName
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-zA-Z0-9]+/g, ' ')
+      .split(/\s+/)
+      .find(word => word.length >= 3);
+    return fallbackWord ? ['#' + fallbackWord.charAt(0).toUpperCase() + fallbackWord.slice(1)] : [];
   }
 }
 
