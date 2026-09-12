@@ -197,9 +197,7 @@ export class SchedulerService {
         /^https?:\/\//i.test(p.original_url) &&
         /^https?:\/\//i.test(p.affiliate_url) &&
         p.affiliate_url.includes('/20889') &&
-        Boolean(p.facebook_copy?.trim()) &&
-        !/https?:\/\//i.test(p.facebook_copy) &&
-        !/R\$/i.test(p.facebook_copy)
+        true // Copy is generated/repaired by the canonical FacebookCopyAgent.
       );
 
       if (!candidates.length) {
@@ -313,7 +311,9 @@ export class SchedulerService {
     // copies that the previous narrow detector could not recognize.
     const safeCopy = await contentService.ensureCopyForPublication(pub.product, pub.content);
     if (!safeCopy.content?.trim()) throw new Error('FACEBOOK_COPY_REGENERATION_FAILED');
-    if (safeCopy.content.trim() !== (pub.content || '').trim()) {
+    const previousCopy = (pub.content || '').trim();
+    const repaired = safeCopy.content.trim() !== previousCopy;
+    if (repaired) {
       logger.scheduler('COPY_REPAIRED id=' + pub.id + ' product=' + pub.product_id, 'warn');
       const updated = await storage.updatePublication(pub.id, {
         content: safeCopy.content.trim(),
@@ -322,12 +322,10 @@ export class SchedulerService {
         status: 'draft'
       });
       if (!updated) throw new Error('FACEBOOK_COPY_REPAIR_PERSIST_FAILED');
-    }
-    pub.content = safeCopy.content.trim();
-    if (safeCopy.content.trim() !== (pub.content || '').trim()) {
       pub.attempts = 0;
       pub.status = 'draft';
     }
+    pub.content = safeCopy.content.trim();
     if (!contentService.isPublicationCopySafe(pub.product, pub.content)) {
       throw new Error('FACEBOOK_COPY_SAFETY_GATE_FAILED');
     }
