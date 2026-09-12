@@ -106,7 +106,7 @@ export class FacebookCopyAgent {
         .replace(/\n{3,}/g, '\n\n')
         .trim();
 
-      if (/(?:^|\\n)\\s*(?:we need to|let'?s craft|check:|however,|the name includes|vamos criar|precisamos garantir|system prompt|user prompt)/i.test(content)) {
+      if (/(?:^|\n)\s*(?:we need to|let'?s craft|check:|however,|the name includes|vamos criar|precisamos garantir|system prompt|user prompt)/i.test(content)) {
         return { ...result, success: false, content: '', error: 'Modelo retornou texto de raciocínio em vez de copy final.' };
       }
     }
