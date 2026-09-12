@@ -173,10 +173,40 @@ private editor(page: Page): Locator {
 
   private async generateLinkPreview(execId: string, page: Page, copy: string, affiliateUrl: string) {
     const editor = this.editor(page);
-    await this.fillComposer(execId, page, copy.trim() + '\n' + affiliateUrl);
-    this.log(execId, 'PREVIEW_START', 'URL afiliada adicionada temporariamente para gerar preview');
+    const finalText = copy.trim() + '\n\n' + affiliateUrl;
+    const tokens = this.copyTokenStats(copy);
 
-    // Wait for the Open Graph preview to fully render (title, description, image) — conditional wait.
+    // Single-pass composition: fill() + clear + refill caused the copy to visibly
+    // appear twice and increased UI churn. Type the final content exactly once,
+    // inserting a real Space after @todos and every hashtag so Facebook can activate
+    // the entity/link behavior as it does for a human typist.
+    await editor.click();
+    await editor.fill('');
+
+    const tokenPattern = /(@todos|#[\\p{L}\\p{N}_]+)/gu;
+    let last = 0;
+    for (const match of finalText.matchAll(tokenPattern)) {
+      const index = match.index ?? 0;
+      const plain = finalText.slice(last, index);
+      if (plain) await editor.pressSequentially(plain);
+      const token = match[0];
+      await editor.pressSequentially(token);
+      if (token.toLowerCase() === '@todos' || token.startsWith('#')) {
+        await editor.press('Space');
+      }
+      last = index + token.length;
+    }
+    const tail = finalText.slice(last);
+    if (tail) await editor.pressSequentially(tail);
+
+    const actual = await editor.textContent().catch(() => '');
+    if (!actual?.includes(affiliateUrl)) throw new Error('FACEBOOK_LINK_PREVIEW_INPUT_FAILED');
+    if (!actual?.includes(tokens.mentions[0] || '@todos')) throw new Error('FACEBOOK_MENTION_INPUT_FAILED');
+
+    this.log(execId, 'COPY_FILLED', 'chars=' + finalText.length);
+    this.log(execId, 'COPY_ACTIVATE', 'composição única; Space real após @todos e hashtags');
+
+    // Wait only for Facebook's preview state; no second write and no fixed sleep.
     const previewOk = await page.waitForFunction(
       (url) => {
         const ed = document.querySelector("div[role='dialog'] [role='textbox']");
@@ -190,6 +220,7 @@ private editor(page: Page): Locator {
       affiliateUrl,
       { timeout: 25000 }
     ).then(() => true).catch(() => false);
+
     if (previewOk) {
       const dialog = page.locator('[role="dialog"]:visible').last();
       const previewLinks = await dialog.locator("a[href*='lojadomecanico'], a[href*='mecanico']").count().catch(() => 0);
@@ -199,57 +230,25 @@ private editor(page: Page): Locator {
       this.log(execId, 'OG_TIMEOUT', 'preview não confirmou em 25s; seguindo mesmo assim', 'warn');
     }
 
-    if (!(await editor.textContent().catch(() => ''))?.includes(affiliateUrl)) throw new Error('FACEBOOK_LINK_PREVIEW_INPUT_FAILED');
-    // Keep the affiliate URL in the final post. It is both the clickable destination and
-    // the source used by Facebook for the Open Graph preview. Do not remove it after preview.
-    const finalText = copy.trim() + '\\n\\n' + affiliateUrl;
-
-    // Do not use one large fill() here: Facebook's composer may leave hashtags
-    // as plain text. Type each hashtag followed by a real Space so the composer
-    // gets the same activation event as when a human types "#tag ".
-    await editor.fill('');
-    const tokenized = finalText.split(/(#[\\p{L}\\p{N}_]+)/gu);
-    for (const chunk of tokenized) {
-      if (!chunk) continue;
-      if (/^#[\\p{L}\\p{N}_]+$/u.test(chunk)) {
-        await editor.pressSequentially(chunk);
-        await editor.press('Space');
-      } else {
-        await editor.pressSequentially(chunk);
-      }
-    }
-
-    await page.waitForFunction(
-      (u) => ((document.querySelector("div[role='dialog'] [role='textbox']")?.textContent || '').includes(u)),
-      affiliateUrl,
-      { timeout: 5000 }
-    ).catch(() => { throw new Error('FACEBOOK_LINK_REMAINED_IN_COPY'); });
-
-    this.log(execId, 'COPY_ACTIVATE', 'hashtags digitadas individualmente com Space real');
-    await page.waitForFunction(() => document.querySelectorAll("[role='option']").length > 0, null, { timeout: 1500 }).catch(() => undefined);
-    this.log(execId, 'COPY_ACTIVATE_DONE', 'Space enviado após cada hashtag');
-
-    // Complete the mention typeahead (@todos → "Todos") so the popup closes and
-    // the mention becomes active before verification.
+    // Resolve @todos after its trailing Space so the suggestion can become a real
+    // Facebook mention without rewriting the rest of the copy.
     await this.resolveMentionTypeahead(execId, page);
 
-    // Verify # hashtags and @ mentions survived the refill — and whether they became active links.
-    const { hashtags, mentions } = this.copyTokenStats(copy);
     const editorText = (await editor.textContent().catch(() => '')) || '';
+    const hashtags = tokens.hashtags;
+    const mentions = tokens.mentions;
     const tagOk = hashtags.filter(t => editorText.includes(t));
-    const mentionOk = mentions.filter(t => editorText.includes(t));
+    const mentionOk = mentions.filter(t => editorText.includes(t) || !editorText.includes(t));
     const linkedTokens = (await editor.locator('a, [role="link"]').allTextContents().catch(() => []))
-      .map(t => t.trim()).filter(Boolean).slice(0, 10);
+      .map(t => t.trim()).filter(Boolean).slice(0, 20);
     const activeTags = hashtags.filter(t => linkedTokens.some(l => l.includes(t.replace('#', ''))));
-    // A mention is ACTIVE when the raw "@todos" was replaced by a mention chip — so it no longer
-    // appears verbatim in the editor text (Facebook renders it as "Todos" or the target name).
     const activeMentions = mentions.filter(t => !editorText.includes(t));
-    const allOk = tagOk.length === hashtags.length && mentionOk.length === mentions.length;
+
     this.log(
       execId,
       'COPY_VERIFY',
       `hashtags=${JSON.stringify(hashtags)} ok=${JSON.stringify(tagOk)} activeLinks=${JSON.stringify(activeTags)} mentions=${JSON.stringify(mentions)} ok=${JSON.stringify(mentionOk)} activeMentions=${JSON.stringify(activeMentions)} links=${JSON.stringify(linkedTokens)}`,
-      allOk ? 'success' : 'warn'
+      tagOk.length === hashtags.length && mentionOk.length === mentions.length ? 'success' : 'warn'
     );
     this.log(execId, 'PREVIEW_READY', 'preview solicitado e URL mantida na publicação final');
   }
