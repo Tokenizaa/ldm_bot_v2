@@ -186,7 +186,7 @@ private editor(page: Page): Locator {
     await editor.click();
     await editor.fill('');
 
-    const tokenPattern = /(@todos|#[\\p{L}\\p{N}_]+)/gu;
+    const tokenPattern = /(@todos|#[\p{L}\p{N}_]+)/gu;
     let last = 0;
     for (const match of finalText.matchAll(tokenPattern)) {
       const index = match.index ?? 0;
