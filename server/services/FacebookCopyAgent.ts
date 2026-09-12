@@ -39,10 +39,13 @@ export class FacebookCopyAgent {
       'O nome pode conter especificações técnicas reais; preserve-as quando forem úteis.',
       'Não invente características, benefícios, usos, avaliações, estoque, frete, garantia, urgência, preço, desconto ou promoção.',
       'Não escreva URL; o link será inserido separadamente pelo publicador.',
-      'Escreva uma copy comercial natural, curta e útil para busca no Facebook, com 2 a 4 frases de contexto além do título.',
-      'A copy NÃO pode ser apenas uma repetição do nome. Transforme as informações técnicas do próprio nome em contexto útil: tipo de ferramenta, medida, tensão, potência, quantidade de peças, aplicação indicada pelo nome e demais especificações explicitamente presentes.',
-      'Quando o nome trouxer várias especificações, distribua essas informações naturalmente nas frases, sem criar características novas.',
-      'Evite frases genéricas como "confira este produto" como único conteúdo. O leitor deve entender pelo texto o que está sendo anunciado e quais são seus principais atributos disponíveis no nome.',
+      'Escreva uma copy comercial natural, curta e útil para busca no Facebook, com 3 a 5 frases.',
+      'NÃO crie título, manchete, cabeçalho ou linha inicial apenas repetindo o nome do produto.',
+      'NÃO escreva "Categoria:", "SKU:", "Marca:" ou qualquer outro rótulo de cadastro.',
+      'O nome do produto é uma fonte de fatos técnicos. Transforme essas informações em texto de venda natural: explique o que é, para que tipo de tarefa ele serve quando isso estiver claramente indicado pelo nome, e destaque medidas, tensão, potência, quantidade de peças, tipo de teste ou outras especificações explicitamente presentes.',
+      'A copy deve parecer escrita por uma pessoa para outro profissional/consumidor, e não por um catálogo. Use o nome e as especificações dentro das frases quando forem relevantes, sem simplesmente copiar o título.',
+      'Não invente características, benefícios, usos, avaliações, estoque, frete, garantia, urgência, preço, desconto ou promoção.',
+      'Não escreva URL; o link será inserido separadamente pelo publicador.',
       'Inclua @todos exatamente uma vez em uma linha própria.',
       'Use de 4 a 6 hashtags SEO semanticamente derivadas do nome, marca ou categoria.',
       'Hashtags compostas são permitidas quando formadas por palavras existentes no produto, por exemplo #CaboDeVela a partir de "Cabo de Vela".',
@@ -157,6 +160,16 @@ export class FacebookCopyAgent {
     const identityTokens = [productName, brand, category, sku].filter(Boolean);
     if (!identityTokens.some(v => content.toLowerCase().includes(v.toLowerCase()))) return null;
 
+    // Never accept a catalog-style title as the copy. The product identity must
+    // appear naturally inside the body, not as a standalone heading.
+    const bodyLines = content.split('\n').map(line => line.trim()).filter(Boolean);
+    const normalizedProductName = this.normalizeSearchText(productName);
+    const firstLineNormalized = this.normalizeSearchText(
+      bodyLines[0]?.replace(/^[🔧🛠️📌⭐]+\s*/, '') || ''
+    );
+    if (firstLineNormalized === normalizedProductName) return null;
+    if (/^(?:categoria|sku|marca|produto)\s*:/i.test(bodyLines[0] || '')) return null;
+
     const sourceNormalized = this.normalizeSearchText(identityTokens.join(' '));
     for (const tag of hashtags) {
       const token = this.normalizeSearchText(tag.slice(1));
@@ -184,27 +197,32 @@ export class FacebookCopyAgent {
   }
 
   /**
-   * Final fallback is intentionally publication-ready by construction.
-   * It contains no "Categoria:"/"SKU:" metadata labels.
+   * Deterministic fallback must still be a real sales copy.
+   * It deliberately omits catalog metadata (SKU/category labels) and avoids
+   * using the raw product title as a standalone heading.
    */
   private buildDeterministicCopy(
     productName: string,
     brand: string,
     category: string,
-    sku: string
+    _sku: string
   ): string {
-    const identity = [productName, brand].filter(Boolean).join(' — ');
     const searchPhrase = this.semanticSearchPhrase(productName);
-    const context = [
-      searchPhrase ? 'Para quem procura ' + searchPhrase + ', esta é uma referência da Loja do Mecânico.' : 'Confira esta referência da Loja do Mecânico.',
-      category ? 'Está na categoria ' + category + '.' : '',
-      brand ? 'Da marca ' + brand + (sku ? ', referência ' + sku + '.' : '.') : (sku ? 'Referência ' + sku + '.' : ''),
-      'Veja os detalhes e especificações disponíveis no link.'
-    ].filter(Boolean).join(' ');
+    const brandPhrase = brand ? ' Da marca ' + brand + ',' : '';
+    const categoryPhrase = category ? ' dentro da linha de ' + category.toLowerCase() : '';
+
+    const sentences = [
+      searchPhrase
+        ? 'Se você procura uma solução para ' + searchPhrase.toLowerCase() + ', esta opção atende a essa necessidade com as especificações informadas pelo fabricante.'
+        : 'Uma opção prática para quem busca uma ferramenta com as especificações apresentadas no produto.',
+      brand
+        ? 'O ' + productName + brandPhrase + ' reúne no próprio modelo as características que ajudam na escolha da ferramenta certa' + categoryPhrase + '.'
+        : 'O modelo ' + productName + ' reúne as características técnicas apresentadas no anúncio para facilitar a escolha da ferramenta certa.',
+      'Confira os detalhes e especificações do produto antes de escolher.'
+    ];
 
     return [
-      '🔧 ' + identity,
-      context,
+      sentences.join(' '),
       '@todos',
       this.buildHashtags(productName, brand, category).join(' ')
     ].filter(Boolean).join('\n\n');
