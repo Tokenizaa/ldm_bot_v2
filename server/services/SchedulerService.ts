@@ -169,14 +169,22 @@ export class SchedulerService {
             logger.scheduler(`QUEUE_CREATED id=${publication.id} product=${product.id} slot=${date}T${time}`);
           }
 
-          const result = await this.schedulePublication(publication.id);
-          if (result) {
-            scheduled.push(result);
-            if (result.status === 'scheduled') {
-              usedProducts.add(product.id);
-              usedSlots.add(normalizeScheduledAt(result.scheduled_at));
-            } else if (STRUCTURAL_FACEBOOK_ERRORS.has(result.error_message || '')) {
-              structuralFailure = result.error_message || 'FACEBOOK_STRUCTURAL_FAILURE';
+          try {
+            const result = await this.schedulePublication(publication.id);
+            if (result) {
+              scheduled.push(result);
+              if (result.status === 'scheduled') {
+                usedProducts.add(product.id);
+                usedSlots.add(normalizeScheduledAt(result.scheduled_at));
+              } else if (STRUCTURAL_FACEBOOK_ERRORS.has(result.error_message || '')) {
+                structuralFailure = result.error_message || 'FACEBOOK_STRUCTURAL_FAILURE';
+                break outer;
+              }
+            }
+          } catch (itemErr: any) {
+            logger.scheduler(`ITEM_SCHEDULE_ERROR id=${publication.id}: ${itemErr.message}`, 'error');
+            if (STRUCTURAL_FACEBOOK_ERRORS.has(itemErr.message || '')) {
+              structuralFailure = itemErr.message;
               break outer;
             }
           }

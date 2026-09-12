@@ -18,6 +18,47 @@ const DEFAULT_SETTINGS: AppSettings = {
   nvidia_model: process.env.NVIDIA_MODEL || 'meta/llama-3.2-11b-vision-instruct'
 };
 
+export const DB_ALLOWED_STATUSES = ['draft', 'scheduled', 'publishing', 'published', 'failed', 'cancelled'] as const;
+export type DbStatus = typeof DB_ALLOWED_STATUSES[number];
+
+export const ALLOWED_STATE_TRANSITIONS: Record<PublicationStatus, readonly PublicationStatus[]> = {
+  draft: ['draft', 'attempting', 'publishing', 'scheduled', 'failed', 'cancelled'],
+  attempting: ['attempting', 'publishing', 'scheduled', 'unknown', 'facebook_submitted', 'failed', 'draft', 'cancelled'],
+  publishing: ['publishing', 'attempting', 'scheduled', 'unknown', 'facebook_submitted', 'failed', 'published', 'draft', 'cancelled'],
+  facebook_submitted: ['facebook_submitted', 'scheduled', 'unknown', 'failed', 'draft'],
+  unknown: ['unknown', 'scheduled', 'draft', 'attempting', 'failed', 'cancelled'],
+  failed: ['failed', 'attempting', 'publishing', 'draft', 'cancelled', 'scheduled'],
+  scheduled: ['scheduled', 'published', 'draft', 'cancelled', 'failed'],
+  published: ['published'],
+  cancelled: ['cancelled', 'draft']
+};
+
+/**
+ * Maps application domain status to PostgreSQL schema-compliant status and post_type.
+ * Guarantees that the DB constraint `posts_status_check` is NEVER violated.
+ */
+export function toDbStatus(domainStatus?: PublicationStatus): { status: DbStatus; post_type: string | null } {
+  switch (domainStatus) {
+    case 'attempting':
+    case 'publishing':
+      return { status: 'publishing', post_type: null };
+    case 'unknown':
+    case 'facebook_submitted':
+      return { status: 'draft', post_type: 'unknown' };
+    case 'scheduled':
+      return { status: 'scheduled', post_type: null };
+    case 'published':
+      return { status: 'published', post_type: null };
+    case 'failed':
+      return { status: 'failed', post_type: null };
+    case 'cancelled':
+      return { status: 'cancelled', post_type: null };
+    case 'draft':
+    default:
+      return { status: 'draft', post_type: null };
+  }
+}
+
 export class StorageService {
   private readonly supabase: SupabaseClient;
 
@@ -47,9 +88,16 @@ export class StorageService {
   }
 
   private mapRowToPublication(row: any, product?: Product): Publication {
+    let mappedStatus: PublicationStatus = (row.status || 'draft') as PublicationStatus;
+    if (row.post_type === 'unknown' || row.status === 'unknown' || String(row.error_message || '').includes('[UNKNOWN_VERIFICATION_PENDING]')) {
+      mappedStatus = 'unknown';
+    } else if (row.status === 'publishing') {
+      mappedStatus = 'attempting';
+    }
+
     return {
       id: String(row.id), product_id: String(row.affiliate_link_id || ''), product, scheduled_at: String(row.scheduled_at),
-      status: (row.status || 'draft') as PublicationStatus, content: String(row.content || ''),
+      status: mappedStatus, content: String(row.content || ''),
       facebook_group_url: row.group_id ? String(row.group_id) : undefined,
       facebook_post_url: row.facebook_post_id ? String(row.facebook_post_id) : undefined,
       idempotency_key: row.idempotency_key ? String(row.idempotency_key) : undefined,
@@ -151,7 +199,15 @@ export class StorageService {
 
   async getPublications(status?: PublicationStatus): Promise<Publication[]> {
     let query = this.supabase.from('posts').select('*').order('scheduled_at', { ascending: true });
-    if (status) query = query.eq('status', status);
+    if (status === 'unknown') {
+      query = query.or('post_type.eq.unknown,error_message.ilike.%[UNKNOWN_VERIFICATION_PENDING]%');
+    } else if (status === 'draft') {
+      query = query.eq('status', 'draft').or('post_type.is.null,post_type.neq.unknown');
+    } else if (status === 'attempting') {
+      query = query.eq('status', 'publishing');
+    } else if (status) {
+      query = query.eq('status', status);
+    }
     const { data, error } = await query;
     if (error) throw new Error(`Falha ao consultar posts no Supabase: ${error.message}`);
     const posts = data || [];
@@ -198,14 +254,14 @@ export class StorageService {
     const scheduledAt = normalizeScheduledAt(pub.scheduled_at);
     const key = calculatePublicationIdempotencyKey(pub.product_id, groupUrl, scheduledAt);
 
-    // Initial state is strictly 'draft' unless deliberately initialized as 'attempting'
-    const initialStatus: PublicationStatus = pub.status === 'attempting' ? 'attempting' : 'draft';
+    const { status: dbStatus, post_type: dbPostType } = toDbStatus(pub.status || 'draft');
 
     const record = {
       id: crypto.randomUUID(),
       affiliate_link_id: pub.product_id,
       scheduled_at: scheduledAt,
-      status: initialStatus,
+      status: dbStatus,
+      post_type: dbPostType,
       content: pub.content,
       group_id: groupUrl || null,
       idempotency_key: key,
@@ -222,7 +278,6 @@ export class StorageService {
   async updatePublication(id: string, updates: Partial<Publication>): Promise<Publication | undefined> {
     const clean: Record<string, any> = {};
     if (updates.scheduled_at !== undefined) clean.scheduled_at = normalizeScheduledAt(updates.scheduled_at);
-    if (updates.status !== undefined) clean.status = updates.status;
     if (updates.content !== undefined) clean.content = updates.content;
     if (updates.facebook_group_url !== undefined) clean.group_id = normalizeGroupUrl(updates.facebook_group_url);
     if (updates.facebook_post_url !== undefined) clean.facebook_post_id = updates.facebook_post_url;
@@ -231,6 +286,59 @@ export class StorageService {
     if (updates.attempts !== undefined) clean.attempts = updates.attempts;
     if (updates.max_attempts !== undefined) clean.max_attempts = updates.max_attempts;
     if (updates.next_attempt_at !== undefined) clean.next_attempt_at = updates.next_attempt_at;
+
+    if (updates.status !== undefined) {
+      // 1. Fetch current post to validate state transition
+      const { data: current } = await this.supabase
+        .from('posts')
+        .select('id, status, post_type, error_message')
+        .eq('id', id)
+        .maybeSingle();
+
+      let isAllowed = true;
+      if (current) {
+        let currentDomainStatus: PublicationStatus = (current.status || 'draft') as PublicationStatus;
+        if (current.post_type === 'unknown' || String(current.error_message || '').includes('[UNKNOWN_VERIFICATION_PENDING]')) {
+          currentDomainStatus = 'unknown';
+        } else if (current.status === 'publishing') {
+          currentDomainStatus = 'attempting';
+        }
+
+        const allowedTransitions = ALLOWED_STATE_TRANSITIONS[currentDomainStatus] || [];
+        if (!allowedTransitions.includes(updates.status)) {
+          logger.scheduler(
+            `TRANSIÇÃO_STATUS_BLOQUEADA id=${id} de=${currentDomainStatus} para=${updates.status}. Transição não permitida pela máquina de estados.`,
+            'warn'
+          );
+          isAllowed = false;
+        }
+      }
+
+      if (isAllowed) {
+        const { status: dbStatus, post_type: dbPostType } = toDbStatus(updates.status);
+        clean.status = dbStatus;
+        clean.post_type = dbPostType;
+
+        if (updates.status === 'unknown' || updates.status === 'facebook_submitted') {
+          clean.next_attempt_at = null;
+          if (clean.error_message && !clean.error_message.includes('[UNKNOWN_VERIFICATION_PENDING]')) {
+            clean.error_message = `[UNKNOWN_VERIFICATION_PENDING] ${clean.error_message}`;
+          }
+        } else if (updates.status === 'scheduled' || updates.status === 'published' || updates.status === 'draft') {
+          clean.next_attempt_at = null;
+          if (clean.error_message && clean.error_message.includes('[UNKNOWN_VERIFICATION_PENDING]')) {
+            clean.error_message = clean.error_message.replace(/\[UNKNOWN_VERIFICATION_PENDING\]\s*/g, '');
+          }
+        }
+      }
+    }
+
+    // Strict validation: Guarantee status is ALWAYS within posts_status_check
+    if (clean.status !== undefined && !DB_ALLOWED_STATUSES.includes(clean.status)) {
+      logger.scheduler(`STATUS_POST_INVALIDO: '${clean.status}'. Corrigindo para 'draft' para satisfazer posts_status_check.`, 'error');
+      clean.status = 'draft';
+    }
+
     clean.last_attempt_at = new Date().toISOString();
 
     const { data, error } = await this.supabase.from('posts').update(clean).eq('id', id).select('*').maybeSingle();
@@ -267,6 +375,7 @@ export class StorageService {
 
     const clean: Record<string, any> = {
       status: 'draft',
+      post_type: null,
       attempts: 0,
       next_attempt_at: null,
       error_message: null,

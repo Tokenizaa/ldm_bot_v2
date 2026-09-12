@@ -357,7 +357,7 @@ class FacebookAutomationService {
         if (Number.isNaN(target.getTime()) || target.getTime() <= Date.now()) throw new Error('FACEBOOK_SCHEDULE_IN_PAST');
 
         await facebookSession.requireAuthenticated();
-        const page = await facebookBrowser.getOperationalPage();
+        const page = await facebookBrowser.closeExtraPages();
 
         // 1. Idempotency pre-check: Is it ALREADY in the planner?
         this.log(execId, 'PRE_CHECK_PLANNER', 'Verificando se publicação já existe em /scheduled_posts');

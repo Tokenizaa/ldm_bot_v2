@@ -72,14 +72,18 @@ export class FacebookBrowserService {
       }
     }
 
-    // Intercept any auxiliary/popup tabs and close them immediately
+    // Intercept any auxiliary/popup tabs and close them immediately to enforce a single operational page
     context.on('page', async (newPage) => {
-      if (this.operationalPage && newPage !== this.operationalPage && !newPage.isClosed()) {
-        logger.facebook(`Popup ou aba secundária interceptada (${newPage.url()}). Fechando para manter aba operacional única.`);
-        await newPage.close().catch(() => undefined);
-        if (this.operationalPage && !this.operationalPage.isClosed()) {
-          await this.operationalPage.bringToFront().catch(() => undefined);
+      try {
+        if (this.operationalPage && newPage !== this.operationalPage && !newPage.isClosed()) {
+          logger.facebook(`Popup ou aba secundária interceptada (${newPage.url() || 'nova'}). Fechando imediatamente para manter aba operacional única.`);
+          await newPage.close().catch(() => undefined);
+          if (this.operationalPage && !this.operationalPage.isClosed()) {
+            await this.operationalPage.bringToFront().catch(() => undefined);
+          }
         }
+      } catch (err: any) {
+        logger.facebook(`Erro ao interceptar aba secundária: ${err.message}`, 'warn');
       }
     });
 
@@ -108,44 +112,54 @@ export class FacebookBrowserService {
   }
 
   /**
-   * Explicitly manages and returns the single, validated operational page.
-   * Ensures all automation and session checks interact with the exact same tab.
+   * Closes all extra pages/tabs in the browser context, ensuring strictly
+   * a single operational page is kept and returned.
    */
-  async getOperationalPage(): Promise<Page> {
+  async closeExtraPages(): Promise<Page> {
     const context = await this.start();
+    const pages = context.pages().filter(p => !p.isClosed());
 
-    // 1. If operationalPage is already assigned and not closed, verify responsiveness
+    // 1. If we already have a valid operational page that is alive
     if (this.operationalPage && !this.operationalPage.isClosed()) {
       try {
         await this.operationalPage.evaluate(() => document.readyState);
-
-        // Close any auxiliary tabs that may have opened accidentally (popups, redirects)
-        const otherPages = context.pages().filter(p => p !== this.operationalPage && !p.isClosed());
-        for (const extra of otherPages) {
-          await extra.close().catch(() => undefined);
+        // Close all other pages
+        for (const p of pages) {
+          if (p !== this.operationalPage && !p.isClosed()) {
+            await p.close().catch(() => undefined);
+          }
         }
-
         await this.operationalPage.bringToFront().catch(() => undefined);
         return this.operationalPage;
       } catch (err: any) {
-        logger.facebook(`operationalPage não respondeu (${err.message}). Recriando referência.`, 'warn');
+        logger.facebook(`operationalPage existente não respondeu (${err.message}). Recuperando...`, 'warn');
         this.operationalPage = null;
       }
     }
 
-    // 2. Obtain primary page from context or create a new one
-    const availablePages = context.pages().filter(p => !p.isClosed());
-    const page = availablePages[0] || await context.newPage();
-    this.operationalPage = page;
-    this.bindPageEvents(page);
-
-    // Close any extraneous tabs in the context
-    for (const extra of availablePages.slice(1)) {
-      await extra.close().catch(() => undefined);
+    // 2. Operational page needs to be selected from existing pages or created fresh
+    const remaining = context.pages().filter(p => !p.isClosed());
+    if (remaining.length > 0) {
+      this.operationalPage = remaining[0];
+      this.bindPageEvents(this.operationalPage);
+      for (const extra of remaining.slice(1)) {
+        await extra.close().catch(() => undefined);
+      }
+    } else {
+      this.operationalPage = await context.newPage();
+      this.bindPageEvents(this.operationalPage);
     }
 
-    await page.bringToFront().catch(() => undefined);
-    return page;
+    await this.operationalPage.bringToFront().catch(() => undefined);
+    return this.operationalPage;
+  }
+
+  /**
+   * Explicitly manages and returns the single, validated operational page.
+   * Ensures all automation and session checks interact with the exact same tab.
+   */
+  async getOperationalPage(): Promise<Page> {
+    return this.closeExtraPages();
   }
 
   /**
