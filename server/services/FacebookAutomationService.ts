@@ -407,16 +407,22 @@ private async setDate(execId: string, page: Page, date: string) {
     scheduledDate: string,
     scheduledTime: string,
     productName?: string
-  ): Promise<{ found: boolean; plannerUrl: string; snippet?: string }> {
+  ): Promise<{ found: boolean; plannerUrl: string; snippet?: string; verified: boolean }> {
     const plannerUrl = groupUrl.replace(/\/+$/, '') + '/scheduled_posts';
     try {
       await page.goto(plannerUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
-      await page.waitForFunction(() => (document.body.innerText || '').trim().length > 0, null, { timeout: 10000 }).catch(() => undefined);
+      const hasBody = await page.waitForFunction(
+        () => (document.body.innerText || '').trim().length > 0,
+        null,
+        { timeout: 10000 }
+      ).then(() => true).catch(() => false);
+
+      if (!hasBody) return { found: false, plannerUrl, verified: false };
 
       const bodyText = await page.locator('body').innerText().catch(() => '');
-      const normalizedBody = bodyText.replace(/\s+/g, ' ');
+      const normalizedBody = bodyText.replace(/\s+/g, ' ').trim();
+      if (normalizedBody.length < 20) return { found: false, plannerUrl, verified: false };
 
-      // Needles to check
       const needle80 = content.replace(/\s+/g, ' ').trim().slice(0, 80);
       const nameNeedle = productName ? productName.trim().slice(0, 40) : '';
 
@@ -424,12 +430,12 @@ private async setDate(execId: string, page: Page, date: string) {
       const nameFound = nameNeedle.length > 10 && normalizedBody.includes(nameNeedle);
 
       if (contentFound || nameFound) {
-        return { found: true, plannerUrl, snippet: needle80 };
+        return { found: true, plannerUrl, snippet: needle80, verified: true };
       }
 
-      return { found: false, plannerUrl };
+      return { found: false, plannerUrl, verified: true };
     } catch {
-      return { found: false, plannerUrl };
+      return { found: false, plannerUrl, verified: false };
     }
   }
 
