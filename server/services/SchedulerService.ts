@@ -101,7 +101,7 @@ export class SchedulerService {
     }
 
     this.lastPlannerReconciliationAt = nowMs;
-    logger.scheduler(`PLANNER_RECONCILIATION_START count=\${candidates.length}`);
+    logger.scheduler(`PLANNER_RECONCILIATION_START count=${candidates.length}`);
     const groupUrl = normalizeGroupUrl(settings.facebook_group_url);
 
     for (const pub of candidates) {
