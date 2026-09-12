@@ -82,8 +82,8 @@ export class FacebookCopyAgent {
 
     // Never publish model reasoning/meta-commentary. Nemotron can occasionally
     // answer the prompt as an analyst instead of returning the requested copy.
-    const metaLeak = /(?:^|\\n)\\s*(?:we need to|let'?s craft|let'?s place|check:|however,|actually,|we need to ensure|the name includes|vamos criar|vamos montar|precisamos garantir|verifique:)/i.test(content)
-      || /\\b(?:system prompt|user prompt|fonte de verdade|regras absolutas|resposta do modelo|modelo deve|instrução)/i.test(content);
+    const metaLeak = /(?:^|\n)\s*(?:we need to|let'?s craft|let'?s place|check:|however,|actually,|we need to ensure|the name includes|vamos criar|vamos montar|precisamos garantir|verifique:)/i.test(content)
+      || /\b(?:system prompt|user prompt|fonte de verdade|regras absolutas|resposta do modelo|modelo deve|instrução)/i.test(content);
 
     if (metaLeak) {
       logger.ai('Copy contaminada por texto de raciocínio; solicitando regeneração limpa.', 'warn');
@@ -102,8 +102,8 @@ export class FacebookCopyAgent {
       if (!result.success) return result;
 
       content = result.content
-        .replace(/https?:\\/\\/\\S+|www\\.\\S+/gi, '')
-        .replace(/\\n{3,}/g, '\\n\\n')
+        .replace(/https?:\/\/\S+|www\.\S+/gi, '')
+        .replace(/\n{3,}/g, '\n\n')
         .trim();
 
       if (/(?:^|\\n)\\s*(?:we need to|let'?s craft|check:|however,|the name includes|vamos criar|precisamos garantir|system prompt|user prompt)/i.test(content)) {
