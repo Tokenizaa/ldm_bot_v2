@@ -13,6 +13,11 @@ export interface FacebookCopyResult {
 /**
  * Canonical Facebook product-copy agent.
  * The copy is intentionally short, readable and mobile-friendly.
+ *
+ * Hashtags are controlled by the application, not by the LLM. The model is
+ * responsible for the short body copy; the system always derives 3-4 SEO
+ * hashtags from the product data so a valid model response cannot be rejected
+ * just because the model omitted or formatted hashtags differently.
  */
 export class FacebookCopyAgent {
   async generate(product: Product, customModel?: string): Promise<FacebookCopyResult> {
@@ -43,8 +48,7 @@ export class FacebookCopyAgent {
       'Use o nome do produto naturalmente dentro das frases, sem criar um título separado.',
       'Pode usar 1 ou 2 ícones simples para facilitar a leitura.',
       'Use no máximo 2 parágrafos curtos.',
-      'Depois do texto, coloque @todos em uma linha própria.',
-      'Depois, coloque 3 ou 4 hashtags SEO, uma por linha.',
+      'Não precisa gerar @todos nem hashtags; o sistema adicionará esses elementos automaticamente.',
       'Não use rótulos como Categoria:, SKU:, Marca: ou Produto:.',
       'Não escreva explicações, análise ou instruções.',
       'Finalize com uma CTA curta como Confira os detalhes ou Veja as especificações.'
@@ -156,8 +160,10 @@ export class FacebookCopyAgent {
     content = content.replace(/@todos\b/gi, '').trim();
     if (!content) return null;
 
-    const hashtags = content.match(/#[\p{L}\p{N}_]+/gu) || [];
-    if (hashtags.length < 3 || hashtags.length > 4) return null;
+    // Hashtags and @todos are system-controlled. Remove any model-generated
+    // versions before validating the actual publication body.
+    content = content.replace(/#[\p{L}\p{N}_]+/gu, '').replace(/[ \t]{2,}/g, ' ').trim();
+
     if (/\b(?:r\$|rs\$|preço|preco|valor)\s*[:=-]?\s*\d/i.test(content)) return null;
     if (/\b(?:desconto|promoção|promocao|oferta\s+imperdível|imperdível|imperdivel|frete\s+grátis|frete\s+gratis|entrega\s+grátis|entrega\s+gratis)\b/i.test(content)) return null;
     if (content.length > 420) return null;
@@ -171,17 +177,13 @@ export class FacebookCopyAgent {
     if (firstLineNormalized === normalizedProductName || firstLineNormalized.startsWith(normalizedProductName)) return null;
     if (/^(?:categoria|sku|marca|produto)\s*:/i.test(bodyLines[0] || '')) return null;
 
-    const sourceNormalized = this.normalizeSearchText(identityTokens.join(' '));
-    for (const tag of hashtags) {
-      const token = this.normalizeSearchText(tag.slice(1));
-      if (!token || !sourceNormalized.includes(token)) return null;
-    }
-
     if (!/\b(?:confira|conheça|conheca|veja|descubra|saiba mais)\b/i.test(content)) return null;
 
-    const bodyLinesWithoutTags = bodyLines.filter(line => !/^(?:#[\p{L}\p{N}_]+\s*)+$/u.test(line));
-    const body = bodyLinesWithoutTags.join('\n').trim();
+    const body = bodyLines.join('\n').trim();
     if (!body || body.includes('#')) return null;
+
+    const hashtags = this.buildHashtags(productName, brand, category);
+    if (hashtags.length < 3 || hashtags.length > 4) return null;
 
     const final = [body, '@todos', hashtags.join('\n')].filter(Boolean).join('\n\n').trim();
     if ((final.match(/@todos\b/gi) || []).length !== 1) return null;
@@ -193,31 +195,32 @@ export class FacebookCopyAgent {
   private validationReason(raw: string, productName: string, brand: string, category: string, sku: string): string {
     let content = String(raw || '').replace(/https?:\/\/\S+|www\.\S+/gi, '').replace(/\r/g, '').trim();
     if (!content) return 'empty';
-    const hashtags = content.match(/#[\p{L}\p{N}_]+/gu) || [];
-    if (hashtags.length < 3 || hashtags.length > 4) return `hashtag_count_${hashtags.length}`;
+
+    content = content.replace(/@todos\b/gi, '').replace(/#[\p{L}\p{N}_]+/gu, '').trim();
     if (/\b(?:r\$|rs\$|preço|preco|valor)\s*[:=-]?\s*\d/i.test(content)) return 'price';
     if (/\b(?:desconto|promoção|promocao|oferta\s+imperdível|imperdível|imperdivel|frete\s+grátis|frete\s+gratis|entrega\s+grátis|entrega\s+gratis)\b/i.test(content)) return 'promotion';
     if (content.length > 420) return 'too_long';
+
     const identityTokens = [productName, brand, category, sku].filter(Boolean);
     if (!identityTokens.some(v => content.toLowerCase().includes(v.toLowerCase()))) return 'identity_missing';
-    const bodyLines = content.replace(/@todos\b/gi, '').split('\n').map(line => line.trim()).filter(Boolean);
+
+    const bodyLines = content.split('\n').map(line => line.trim()).filter(Boolean);
     const normalizedProductName = this.normalizeSearchText(productName);
     const firstLineNormalized = this.normalizeSearchText(bodyLines[0]?.replace(/^[🔧🛠️📌⭐📐⚙️]+\s*/, '') || '');
     if (firstLineNormalized === normalizedProductName || firstLineNormalized.startsWith(normalizedProductName)) return 'title_only';
     if (/^(?:categoria|sku|marca|produto)\s*:/i.test(bodyLines[0] || '')) return 'metadata_first_line';
-    const sourceNormalized = this.normalizeSearchText(identityTokens.join(' '));
-    for (const tag of hashtags) {
-      const token = this.normalizeSearchText(tag.slice(1));
-      if (!token || !sourceNormalized.includes(token)) return `hashtag_not_derived:${tag}`;
-    }
     if (!/\b(?:confira|conheça|conheca|veja|descubra|saiba mais)\b/i.test(content)) return 'cta_missing';
-    const body = bodyLines.filter(line => !/^(?:#[\p{L}\p{N}_]+\s*)+$/u.test(line)).join('\n').trim();
-    if (!body || body.includes('#')) return 'hashtags_inside_body';
+    if (!this.buildHashtags(productName, brand, category).length) return 'hashtags_unavailable';
+
     return 'unknown';
   }
 
   private normalizeSearchText(value: string): string {
-    return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9]+/g, '').toLowerCase();
+    return String(value || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-zA-Z0-9]+/g, '')
+      .toLowerCase();
   }
 
   private buildDeterministicCopy(productName: string, brand: string, category: string, _sku: string): string {
@@ -231,29 +234,55 @@ export class FacebookCopyAgent {
 
   private buildHashtags(productName: string, brand: string, category: string): string[] {
     const source = [productName, brand, category].filter(Boolean).join(' ');
-    const words = source.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9]+/g, ' ').split(/\s+/).filter(Boolean);
-    const stop = new Set(['de', 'da', 'do', 'das', 'dos', 'para', 'com', 'em', 'e', 'um', 'uma', 'por', 'tipo', 'pol', 'mm', 'cm', 'm', 'v', 'w', 'entrega', 'frete', 'gratis', 'brasil', 'a', 'o', 'as', 'os']);
-    const significant = words.filter(word => word.length >= 3 && !stop.has(word.toLowerCase()) && !/^\d+(?:[.,]\d+)?$/.test(word));
+    const words = source
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-zA-Z0-9]+/g, ' ')
+      .split(/\s+/)
+      .filter(Boolean);
+
+    const stop = new Set([
+      'de', 'da', 'do', 'das', 'dos', 'para', 'com', 'em', 'e', 'um', 'uma', 'por',
+      'tipo', 'pol', 'mm', 'cm', 'm', 'v', 'w', 'entrega', 'frete', 'gratis', 'brasil',
+      'a', 'o', 'as', 'os'
+    ]);
+    const significant = words.filter(
+      word => word.length >= 3 && !stop.has(word.toLowerCase()) && !/^\d+(?:[.,]\d+)?$/.test(word)
+    );
 
     const tags: string[] = [];
     const add = (value: string) => {
-      if (!value) return;
-      const tag = '#' + value;
+      const clean = value.replace(/[^a-zA-Z0-9]/g, '');
+      if (!clean || clean.length < 3) return;
+      const tag = '#' + clean;
       if (!tags.some(existing => existing.toLowerCase() === tag.toLowerCase())) tags.push(tag);
     };
 
+    // Product-specific semantic phrases are preferred over literal substring
+    // checks. For example, "Furadeira Impacto" is a valid derived SEO tag even
+    // when that exact concatenated string is not present in the product title.
     for (let i = 0; i < significant.length && tags.length < 2; i++) {
       const phrase = significant.slice(i, i + 2);
       if (phrase.length >= 2) add(phrase.map(this.toTagWord).join(''));
     }
 
     if (brand) {
-      const brandWords = brand.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9]+/g, ' ').split(/\s+/).filter(Boolean);
+      const brandWords = brand
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^a-zA-Z0-9]+/g, ' ')
+        .split(/\s+/)
+        .filter(Boolean);
       add(brandWords.map(this.toTagWord).join(''));
     }
 
     if (category && tags.length < 4) {
-      const categoryWords = category.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9]+/g, ' ').split(/\s+/).filter(Boolean);
+      const categoryWords = category
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^a-zA-Z0-9]+/g, ' ')
+        .split(/\s+/)
+        .filter(Boolean);
       add(categoryWords.map(this.toTagWord).join(''));
     }
 
@@ -261,6 +290,11 @@ export class FacebookCopyAgent {
       if (tags.length >= 4) break;
       add(this.toTagWord(word));
     }
+
+    // These are domain-relevant fallbacks only when the product metadata does
+    // not provide enough distinct semantic terms for the required 3-4 tags.
+    if (tags.length < 4) add('Ferramentas');
+    if (tags.length < 4) add('LojaDoMecanico');
 
     return tags.slice(0, 4);
   }
