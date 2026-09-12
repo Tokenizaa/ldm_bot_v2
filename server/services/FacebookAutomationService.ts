@@ -159,14 +159,6 @@ private editor(page: Page): Locator {
     this.log(execId, 'COMPOSER_OPENED', 'dialog=visible textbox=visible');
   }
 
-  private async fillComposer(execId: string, page: Page, content: string) {
-    const editor = this.editor(page);
-    await editor.fill(content);
-    const actual = await editor.textContent().catch(() => '');
-    if (!actual?.includes(content.slice(0, Math.min(40, content.length)))) throw new Error('FACEBOOK_CONTENT_INPUT_FAILED');
-    this.log(execId, 'COPY_FILLED', 'chars=' + content.length);
-  }
-
   private copyTokenStats(copy: string): { hashtags: string[]; mentions: string[] } {
     return {
       hashtags: copy.match(/#\w+/g) || [],
@@ -179,10 +171,9 @@ private editor(page: Page): Locator {
     const finalText = copy.trim() + '\n\n' + affiliateUrl;
     const tokens = this.copyTokenStats(copy);
 
-    // Single-pass composition: fill() + clear + refill caused the copy to visibly
-    // appear twice and increased UI churn. Type the final content exactly once,
-    // inserting a real Enter after @todos and every hashtag so Facebook can activate
-    // the entity/link behavior as it does for a human typist.
+    // Single-pass composition: never fill the composer and then rewrite it.
+    // The final publication is typed exactly once. A real Enter follows @todos
+    // and every hashtag so Facebook can activate those entities like a human input.
     await editor.click();
     await editor.fill('');
 
