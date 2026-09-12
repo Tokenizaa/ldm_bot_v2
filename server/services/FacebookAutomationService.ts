@@ -203,21 +203,31 @@ private editor(page: Page): Locator {
     // Keep the affiliate URL in the final post. It is both the clickable destination and
     // the source used by Facebook for the Open Graph preview. Do not remove it after preview.
     const finalText = copy.trim() + '\\n\\n' + affiliateUrl;
-    await editor.fill(finalText);
+
+    // Do not use one large fill() here: Facebook's composer may leave hashtags
+    // as plain text. Type each hashtag followed by a real Space so the composer
+    // gets the same activation event as when a human types "#tag ".
+    await editor.fill('');
+    const tokenized = finalText.split(/(#[\\p{L}\\p{N}_]+)/gu);
+    for (const chunk of tokenized) {
+      if (!chunk) continue;
+      if (/^#[\\p{L}\\p{N}_]+$/u.test(chunk)) {
+        await editor.pressSequentially(chunk);
+        await editor.press('Space');
+      } else {
+        await editor.pressSequentially(chunk);
+      }
+    }
+
     await page.waitForFunction(
       (u) => ((document.querySelector("div[role='dialog'] [role='textbox']")?.textContent || '').includes(u)),
       affiliateUrl,
       { timeout: 5000 }
     ).catch(() => { throw new Error('FACEBOOK_LINK_REMAINED_IN_COPY'); });
 
-    // Facebook only parses #hashtags and @mentions when a space follows them.
-    // fill() inserts literal text; a trailing Space triggers the composer to
-    // convert them into active links/mentions.
-    this.log(execId, 'COPY_ACTIVATE', 'enviando Space para ativar # e @');
-    await editor.press('Space');
-    // Wait for the mention typeahead (or any option popup) to open after the Space — conditional wait.
-    await page.waitForFunction(() => document.querySelectorAll("[role='option']").length > 0, null, { timeout: 5000 }).catch(() => undefined);
-    this.log(execId, 'COPY_ACTIVATE_DONE', 'Space enviado');
+    this.log(execId, 'COPY_ACTIVATE', 'hashtags digitadas individualmente com Space real');
+    await page.waitForFunction(() => document.querySelectorAll("[role='option']").length > 0, null, { timeout: 1500 }).catch(() => undefined);
+    this.log(execId, 'COPY_ACTIVATE_DONE', 'Space enviado após cada hashtag');
 
     // Complete the mention typeahead (@todos → "Todos") so the popup closes and
     // the mention becomes active before verification.
