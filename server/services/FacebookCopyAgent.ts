@@ -35,6 +35,8 @@ export class FacebookCopyAgent {
       '',
       'REGRAS ABSOLUTAS:',
       '- NUNCA escreva preço, valor, moeda, desconto percentual ou números que representem preço.',
+      '- Não transforme números soltos do nome em preço, avaliação ou desconto. Números técnicos do produto (ex.: 1250W, 7/9 Pol.) podem ser mantidos quando forem claramente especificações.',
+      '- Não repita selos/promessas comerciais embutidos no nome (ex.: Frete Grátis, Entrega, 4.9) quando não existir campo estruturado correspondente.'
       '- NUNCA escreva URL, domínio ou link.',
       '- Use o nome real do produto como núcleo da publicação.',
       '- Use marca, categoria e SKU quando ajudarem na busca e identificação.',
@@ -49,9 +51,17 @@ export class FacebookCopyAgent {
       'O link de afiliado será inserido separadamente pelo publicador apenas para gerar o preview Open Graph e depois poderá ser removido do texto. Ele NÃO pertence à copy.'
     ].join('\n');
 
+    // Product names scraped from commerce pages can contain merchandising suffixes
+    // (shipping claims, ratings, badges) that are not structured product attributes.
+    // Keep the real product identity, but do not turn those suffixes into claims.
+    const productNameForCopy = product.product_name
+      .replace(/\s*(?:[-–—|]+\s*)?(?:Entrega\s+)?Frete\s+Grátis.*$/i, '')
+      .replace(/\s+(?:\d+(?:[.,]\d+)?)\s*$/i, '')
+      .trim();
+
     const userPrompt = [
       'Dados reais do produto:',
-      'Nome: ' + product.product_name,
+      'Nome do produto (identidade, sem selos/promessas comerciais do título): ' + productNameForCopy,
       'Marca: ' + (product.brand || 'não informada'),
       'Categoria: ' + (product.category || 'não informada'),
       'Código/SKU: ' + (product.sku || 'não informado')
