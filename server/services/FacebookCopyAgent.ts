@@ -12,12 +12,8 @@ export interface FacebookCopyResult {
 
 /**
  * Canonical Facebook product-copy agent.
- *
- * Contract:
- * - AI may improve wording, but never defines the publication schema.
- * - Product data is the only factual source.
- * - The same local validator is applied to AI output, persisted copies and fallback.
- * - Deterministic fallback is itself guaranteed to satisfy the canonical contract.
+ * Product data is the only factual source; AI wording is accepted only after
+ * the same local safety gate used by persisted and deterministic copies.
  */
 export class FacebookCopyAgent {
   async generate(product: Product, customModel?: string): Promise<FacebookCopyResult> {
@@ -40,13 +36,13 @@ export class FacebookCopyAgent {
       'Você cria a copy final de um anúncio de produto para um grupo brasileiro do Facebook.',
       'Retorne SOMENTE a publicação final, sem análise, raciocínio, explicações, rótulos ou markdown de campos.',
       'Use exclusivamente os dados fornecidos do produto.',
-      'O nome do produto pode conter especificações técnicas reais; preserve-as quando forem úteis.',
+      'O nome pode conter especificações técnicas reais; preserve-as quando forem úteis.',
       'Não invente características, benefícios, usos, avaliações, estoque, frete, garantia, urgência, preço, desconto ou promoção.',
-      'Não escreva URL. O link será inserido separadamente pelo publicador.',
+      'Não escreva URL; o link será inserido separadamente pelo publicador.',
       'Escreva uma copy comercial natural, com SEO semântico e mais contexto do que apenas repetir o título.',
       'Inclua @todos exatamente uma vez em uma linha própria.',
-      'Inclua de 3 a 4 hashtags SEO relevantes derivadas semanticamente do nome, marca ou categoria.',
-      'A hashtag pode combinar palavras que já estejam no nome/categoria (ex.: CaboDeVela a partir de Cabo de Vela).',
+      'Use de 3 a 4 hashtags SEO semanticamente derivadas do nome, marca ou categoria.',
+      'Hashtags compostas são permitidas quando formadas por palavras existentes no produto, por exemplo #CaboDeVela a partir de "Cabo de Vela".',
       'Finalize com uma CTA factual para conhecer ou conferir o produto, sem prometer oferta, desconto ou preço.'
     ].join('\n');
 
@@ -61,9 +57,7 @@ export class FacebookCopyAgent {
     const first = await nvidiaAI.generateRawCopy(systemPrompt, userPrompt, model);
     if (first.success) {
       const normalized = this.normalizeAndValidate(first.content, productName, brand, category, sku);
-      if (normalized) {
-        return { ...first, success: true, content: normalized };
-      }
+      if (normalized) return { ...first, success: true, content: normalized };
       logger.ai('Modelo retornou copy inválida/contaminada; usando fallback determinístico.', 'warn');
     }
 
@@ -121,10 +115,6 @@ export class FacebookCopyAgent {
     return normalized || this.buildDeterministicCopy(productName, brand, category, sku);
   }
 
-  /**
-   * Validates actual contamination and publication rules without rejecting
-   * ordinary prose merely because it contains words such as "marca" or "categoria".
-   */
   private normalizeAndValidate(
     raw: string,
     productName: string,
@@ -145,7 +135,6 @@ export class FacebookCopyAgent {
       /(?:^|\n)\s*(?:nome|marca|categoria|sku|produto)\s*:/i,
       /\b(?:instrução|instrucao|modelo deve|resposta do modelo)\b/i
     ];
-
     if (forbiddenMeta.some(re => re.test(content))) return null;
 
     content = content
@@ -153,13 +142,11 @@ export class FacebookCopyAgent {
       .replace(/[\`"]{1,3}\s*$/g, '')
       .trim();
 
-    // Rebuild @todos locally so it is always exactly one canonical token.
     content = content.replace(/@todos\b/gi, '').trim();
     if (!content) return null;
 
     const hashtags = content.match(/#[\p{L}\p{N}_]+/gu) || [];
     if (hashtags.length > 4) return null;
-
     if (/\b(?:r\$|rs\$|preço|preco|valor)\s*[:=-]?\s*\d/i.test(content)) return null;
     if (/\b(?:desconto|promoção|promocao|oferta\s+imperdível|imperdível|imperdivel|frete\s+grátis|frete\s+gratis|entrega\s+grátis|entrega\s+gratis)\b/i.test(content)) return null;
     if (content.length > 650) return null;
@@ -194,8 +181,8 @@ export class FacebookCopyAgent {
   }
 
   /**
-   * Guaranteed-safe fallback. It contains no metadata labels and is accepted
-   * by the same validator used for AI/persisted copies.
+   * Final fallback is intentionally publication-ready by construction.
+   * It contains no "Categoria:"/"SKU:" metadata labels.
    */
   private buildDeterministicCopy(
     productName: string,
@@ -204,20 +191,19 @@ export class FacebookCopyAgent {
     sku: string
   ): string {
     const identity = [productName, brand].filter(Boolean).join(' — ');
-    const contextParts = [
-      category ? 'Categoria ' + category : '',
-      sku ? 'modelo ' + sku : ''
-    ].filter(Boolean);
-    const context = contextParts.join(' • ');
-
-    const hashtags = this.buildHashtags(productName, brand, category);
+    const seoSentence = [
+      'Conheça',
+      identity || productName,
+      category ? 'na categoria ' + category : '',
+      sku && !productName.toLowerCase().includes(sku.toLowerCase()) ? 'referência ' + sku : ''
+    ].filter(Boolean).join(' ') + '.';
 
     return [
       '🔧 ' + identity,
-      context ? 'Conheça o produto na ' + context + '.' : 'Conheça este produto e seus detalhes.',
+      seoSentence,
       'Confira o produto e veja todos os detalhes.',
       '@todos',
-      hashtags.join(' ')
+      this.buildHashtags(productName, brand, category).join(' ')
     ].filter(Boolean).join('\n\n');
   }
 
@@ -249,18 +235,11 @@ export class FacebookCopyAgent {
       if (!tags.some(existing => existing.toLowerCase() === tag.toLowerCase())) tags.push(tag);
     };
 
-    // Prefer semantic 2-word phrases rather than isolated SEO fragments.
-    for (let i = 0; i < words.length && tags.length < 2; i++) {
-      if (stop.has(words[i].toLowerCase()) || words[i].length < 3) continue;
-      const phrase: string[] = [words[i]];
-
-      for (let j = i + 1; j < words.length && phrase.length < 2; j++) {
-        const word = words[j];
-        if (stop.has(word.toLowerCase()) || word.length < 3 || /^\d+(?:[.,]\d+)?$/.test(word)) break;
-        phrase.push(word);
-      }
-
-      if (phrase.length === 2) add(phrase.map(this.toTagWord).join(''));
+    // Build semantic phrases by skipping stop words between meaningful terms.
+    // Example: "Testador para Cabo de Vela" -> #TestadorCaboVela and #CaboVela.
+    for (let i = 0; i < significant.length && tags.length < 2; i++) {
+      const phrase = significant.slice(i, i + 3);
+      if (phrase.length >= 2) add(phrase.map(this.toTagWord).join(''));
     }
 
     if (brand) {
