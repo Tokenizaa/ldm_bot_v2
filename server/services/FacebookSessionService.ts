@@ -13,6 +13,7 @@ export class FacebookSessionService {
   };
 
   private sessionLock: Promise<void> = Promise.resolve();
+  private readonly sessionHealthTtlMs = 5 * 60 * 1000;
 
   private async withLock<T>(operation: () => Promise<T>): Promise<T> {
     const previous = this.sessionLock;
@@ -246,6 +247,19 @@ export class FacebookSessionService {
   }
 
   async requireAuthenticated(): Promise<void> {
+    const lastAuthenticated = this.status.last_authenticated_at
+      ? Date.parse(this.status.last_authenticated_at)
+      : 0;
+    const fresh = this.status.connected &&
+      this.status.group_accessible !== false &&
+      Number.isFinite(lastAuthenticated) &&
+      Date.now() - lastAuthenticated < this.sessionHealthTtlMs;
+
+    if (fresh) {
+      logger.facebook('[Session] Saúde da sessão reutilizada; nova verificação completa adiada pelo TTL.');
+      return;
+    }
+
     const status = await this.refresh();
     if (!status.connected) throw new Error('FACEBOOK_REAUTH_REQUIRED');
   }
