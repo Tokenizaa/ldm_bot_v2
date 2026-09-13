@@ -16,6 +16,7 @@ import {
 } from '../utils/idempotency.js';
 
 const CONFIRMED_STATUSES = ['scheduled', 'published'] as const;
+const ACTIVE_PRODUCT_STATUSES = ['scheduled', 'published', 'attempting', 'unknown'] as const;
 const STRUCTURAL_FACEBOOK_ERRORS = new Set([
   'FACEBOOK_GROUP_NOT_READY',
   'FACEBOOK_COMPOSER_NOT_AVAILABLE',
@@ -37,6 +38,7 @@ export class SchedulerService {
   private readonly plannerReconciliationTtlMs = 10 * 60 * 1000;
   private readonly plannerReconciliationHorizonMs = 48 * 60 * 60 * 1000;
   private readonly plannerReconciliationMaxItems = 10;
+  private readonly staleAttemptingThresholdMs = 20 * 60 * 1000;
 
   private async waitForSchedulePacing(): Promise<void> {
     if (this.lastScheduleOperationAt === 0) {
@@ -79,6 +81,27 @@ export class SchedulerService {
       logger.scheduler(`STARTUP_MONTHLY_SCHEDULE confirmed=${result.scheduled.filter(p => p.status === 'scheduled').length} message=${result.message}`, 'success');
     } catch (error: any) {
       logger.scheduler('STARTUP_MONTHLY_SCHEDULE failed: ' + error.message, 'error');
+    }
+  }
+
+  private async recoverStaleAttemptingPublications(all: Publication[], nowMs: number): Promise<void> {
+    const stale = all.filter(p =>
+      p.status === 'attempting' &&
+      p.updated_at &&
+      nowMs - new Date(p.updated_at).getTime() >= this.staleAttemptingThresholdMs
+    );
+
+    if (!stale.length) return;
+
+    logger.scheduler(`STALE_ATTEMPTING_RECOVERY_START count=${stale.length}`, 'warn');
+    for (const pub of stale) {
+      const updated = await storage.updatePublication(pub.id, {
+        status: 'unknown',
+        error_message: 'Tentativa de agendamento ficou presa em publishing; requer reconciliação do planner antes de novo envio.'
+      });
+      if (updated) {
+        logger.scheduler(`STALE_ATTEMPTING_RECOVERED id=${pub.id} product=${pub.product_id} slot=${pub.scheduled_at}`, 'warn');
+      }
     }
   }
 
@@ -158,13 +181,19 @@ export class SchedulerService {
       const all = await storage.getPublications();
       logger.scheduler(`MONTHLY_SCAN month=${monthPrefix} localNow=${localDateString(now)}`);
 
-      await this.reconcileNearTermScheduledPublications(all, settings, now.getTime());
+      await this.recoverStaleAttemptingPublications(all, now.getTime());
+      const recoveredAll = await storage.getPublications();
+      await this.reconcileNearTermScheduledPublications(recoveredAll, settings, now.getTime());
 
       const refreshedAll = await storage.getPublications();
       const confirmed = refreshedAll.filter(p =>
         (CONFIRMED_STATUSES as readonly string[]).includes(p.status) &&
         !p.error_message &&
         (p.published_at || p.scheduled_at)
+      );
+      const activeProducts = refreshedAll.filter(p =>
+        (ACTIVE_PRODUCT_STATUSES as readonly string[]).includes(p.status) &&
+        new Date(p.scheduled_at).getTime() > now.getTime()
       );
       const reservedMonth = confirmed.filter(p => {
         const ref = p.published_at || p.scheduled_at || '';
@@ -180,7 +209,7 @@ export class SchedulerService {
       }
 
       const hours = settings.daily_hours?.length ? settings.daily_hours : DEFAULT_HOURS;
-      const usedProducts = new Set(confirmed.map(p => p.product_id));
+      const usedProducts = new Set(activeProducts.map(p => p.product_id));
       const usedSlots = new Set(
         confirmed
           .filter(p => localDateString(new Date(p.scheduled_at)).startsWith(monthPrefix))
@@ -209,7 +238,7 @@ export class SchedulerService {
       if (!candidates.length) {
         return {
           scheduled: [],
-          quota: await storage.getQuota(all, settings),
+          quota: await storage.getQuota(refreshedAll, settings),
           message: 'Nenhum produto real e elegível disponível.'
         };
       }
@@ -386,49 +415,62 @@ export class SchedulerService {
     const groupUrl = normalizeGroupUrl(pub.facebook_group_url || settings.facebook_group_url);
     await this.waitForSchedulePacing();
 
-    const result = await facebookAutomation.schedule({
-      groupUrl,
-      content: pub.content,
-      affiliateUrl: pub.product.affiliate_url,
-      scheduledDate: date,
-      scheduledTime: time,
-      productName: pub.product.product_name,
-      sku: pub.product.sku
-    });
+    try {
+      const result = await facebookAutomation.schedule({
+        groupUrl,
+        content: pub.content,
+        affiliateUrl: pub.product.affiliate_url,
+        scheduledDate: date,
+        scheduledTime: time,
+        productName: pub.product.product_name,
+        sku: pub.product.sku
+      });
 
-    if (result.success) {
-      logger.scheduler(`FACEBOOK_SCHEDULE_CONFIRMED id=${pub.id} planner=${result.plannerUrl || 'verified'}`, 'success');
+      if (result.success) {
+        logger.scheduler(`FACEBOOK_SCHEDULE_CONFIRMED id=${pub.id} planner=${result.plannerUrl || 'verified'}`, 'success');
+        return storage.updatePublication(pub.id, {
+          status: 'scheduled',
+          attempts,
+          error_message: undefined,
+          facebook_post_url: result.postUrl,
+          planner_url: result.plannerUrl,
+          scheduled_at: result.scheduledAt || pub.scheduled_at
+        });
+      }
+
+      if (result.uncertain || result.submitted) {
+        logger.scheduler(`FACEBOOK_SCHEDULE_UNCERTAIN id=${pub.id} err=${result.error}`, 'warn');
+        return storage.updatePublication(pub.id, {
+          status: 'unknown',
+          attempts,
+          error_message: result.error || 'FACEBOOK_CONFIRMATION_UNCERTAIN: Ação enviada ao Facebook, mas confirmação falhou. Bloqueado contra retry automático.',
+          planner_url: result.plannerUrl,
+          next_attempt_at: undefined
+        });
+      }
+
+      const backoffMinutes = Math.min(120, Math.pow(2, attempts) * 5);
+      const nextAttemptAt = attempts < maxAttempts ? new Date(Date.now() + backoffMinutes * 60000).toISOString() : undefined;
+
+      logger.scheduler(`FACEBOOK_SCHEDULE_FAILED id=${pub.id} attempts=${attempts}/${maxAttempts} next=${nextAttemptAt || 'none'} err=${result.error}`, 'error');
       return storage.updatePublication(pub.id, {
-        status: 'scheduled',
+        status: 'failed',
         attempts,
-        error_message: undefined,
-        facebook_post_url: result.postUrl,
-        planner_url: result.plannerUrl,
-        scheduled_at: result.scheduledAt || pub.scheduled_at
+        error_message: result.error || 'Facebook não confirmou o agendamento.',
+        next_attempt_at: nextAttemptAt
+      });
+    } catch (err: any) {
+      const errorMessage = String(err?.message || err || 'FACEBOOK_SCHEDULE_EXCEPTION');
+      logger.scheduler(`FACEBOOK_SCHEDULE_EXCEPTION id=${pub.id} attempts=${attempts}/${maxAttempts} err=${errorMessage}`, 'error');
+      const backoffMinutes = Math.min(120, Math.pow(2, attempts) * 5);
+      const nextAttemptAt = attempts < maxAttempts ? new Date(Date.now() + backoffMinutes * 60000).toISOString() : undefined;
+      return storage.updatePublication(pub.id, {
+        status: 'failed',
+        attempts,
+        error_message: errorMessage,
+        next_attempt_at: nextAttemptAt
       });
     }
-
-    if (result.uncertain || result.submitted) {
-      logger.scheduler(`FACEBOOK_SCHEDULE_UNCERTAIN id=${pub.id} err=${result.error}`, 'warn');
-      return storage.updatePublication(pub.id, {
-        status: 'unknown',
-        attempts,
-        error_message: result.error || 'FACEBOOK_CONFIRMATION_UNCERTAIN: Ação enviada ao Facebook, mas confirmação falhou. Bloqueado contra retry automático.',
-        planner_url: result.plannerUrl,
-        next_attempt_at: undefined
-      });
-    }
-
-    const backoffMinutes = Math.min(120, Math.pow(2, attempts) * 5);
-    const nextAttemptAt = attempts < maxAttempts ? new Date(Date.now() + backoffMinutes * 60000).toISOString() : undefined;
-
-    logger.scheduler(`FACEBOOK_SCHEDULE_FAILED id=${pub.id} attempts=${attempts}/${maxAttempts} next=${nextAttemptAt || 'none'} err=${result.error}`, 'error');
-    return storage.updatePublication(pub.id, {
-      status: 'failed',
-      attempts,
-      error_message: result.error || 'Facebook não confirmou o agendamento.',
-      next_attempt_at: nextAttemptAt
-    });
   }
 
   async checkAndProcessDuePublications(): Promise<number> {
@@ -509,24 +551,24 @@ export class SchedulerService {
       return updated || pub;
     }
 
-    logger.scheduler(`RECONCILE_UNKNOWN_ABSENT id=${pub.id} ausente no planner Facebook; resetado para draft.`, 'warn');
+    logger.scheduler(`RECONCILE_UNKNOWN_ABSENT id=${pub.id} ausente no planner.`, 'warn');
     const updated = await storage.updatePublication(pub.id, {
       status: 'draft',
-      error_message: 'Verificado ausente no planner do Facebook. Liberado com segurança para novo agendamento.'
+      error_message: 'Verificado ausente no planner Facebook.'
     });
     return updated || pub;
   }
 
   async publishNow(_publicationId: string): Promise<Publication | undefined> {
-    throw new Error('FACEBOOK_IMMEDIATE_PUBLISH_DISABLED: o fluxo operacional é agendamento nativo no Facebook.');
+    throw new Error('FACEBOOK_IMMEDIATE_PUBLISH_DISABLED');
   }
 
-  async reschedule(_publicationId: string, _newDateIso: string): Promise<Publication | undefined> {
-    throw new Error('FACEBOOK_NATIVE_RESCHEDULE_UNSUPPORTED: altere o agendamento diretamente no Facebook.');
+  async reschedule(_publicationId: string, _scheduledAt: string): Promise<Publication | undefined> {
+    throw new Error('FACEBOOK_RESCHEDULE_DISABLED');
   }
 
   async cancel(_publicationId: string): Promise<Publication | undefined> {
-    throw new Error('FACEBOOK_NATIVE_CANCEL_UNSUPPORTED: cancelamento nativo deve ser feito no Facebook.');
+    throw new Error('FACEBOOK_NATIVE_CANCEL_UNSUPPORTED');
   }
 }
 
