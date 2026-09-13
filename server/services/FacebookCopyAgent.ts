@@ -120,6 +120,19 @@ export class FacebookCopyAgent {
     return Boolean(this.normalizeAndValidate(raw, productName, brand, category, sku));
   }
 
+  repairDeterministicCopy(product: Product): string {
+    const productName = this.cleanProductName(product.product_name);
+    const brand = this.cleanField(product.brand);
+    const category = this.cleanField(product.category);
+    const sku = this.cleanField(product.sku);
+    const deterministic = this.buildDeterministicCopy(productName, brand, category, sku);
+    const normalized = this.normalizeAndValidate(deterministic, productName, brand, category, sku);
+    if (!normalized) {
+      throw new Error(`FACEBOOK_COPY_DETERMINISTIC_INVALID:${this.validationReason(deterministic, productName, brand, category, sku)}`);
+    }
+    return normalized;
+  }
+
   async ensurePublicationCopy(product: Product, existingCopy?: string, customModel?: string): Promise<string> {
     const productName = this.cleanProductName(product.product_name);
     const brand = this.cleanField(product.brand);
