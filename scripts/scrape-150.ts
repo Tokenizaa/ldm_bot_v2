@@ -1,7 +1,10 @@
 import 'dotenv/config';
+import { installCatalogOnlyStorageGuard } from '../server/services/CatalogOnlyStorageGuard.js';
 import { crawler } from '../server/services/CrawlerService.js';
 import { storage } from '../server/services/StorageService.js';
 import { buildAffiliateUrl } from '../server/utils/affiliate.js';
+
+installCatalogOnlyStorageGuard();
 
 async function main() {
   const result = await crawler.run();
