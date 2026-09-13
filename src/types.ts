@@ -56,9 +56,7 @@ export interface AppSettings {
   nvidia_model: string;
 }
 
-export type ThemeMode = 'light' | 'dark' | 'system';
-
-export interface OperationalQuota {
+export type OperationalQuota = {
   current_month: string;
   monthly_publication_count: number;
   monthly_limit: number;
@@ -66,7 +64,7 @@ export interface OperationalQuota {
   daily_limit: number;
   remaining_month: number;
   today_date: string;
-}
+};
 
 export interface DashboardStats {
   products_found: number;
@@ -96,16 +94,18 @@ export interface SystemUser {
   role: string;
 }
 
-export type FacebookSessionStatus = {
+export type ThemeMode = 'light' | 'dark' | 'system';
+
+export interface FacebookSessionStatus {
   connected: boolean;
-  status: 'connected' | 'connecting' | 'requires_reauth' | 'disconnected';
+  status: 'connected' | 'requires_reauth' | 'disconnected';
   last_authenticated_at?: string;
   configured_group_url?: string;
   group_accessible?: boolean;
   connected_user?: string;
   profile_dir: string;
   details?: string;
-};
+}
 
 export interface LogEntry {
   id: string;
