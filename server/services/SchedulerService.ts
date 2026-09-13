@@ -310,18 +310,6 @@ export class SchedulerService {
             const errorMessage = String(itemErr?.message || itemErr || 'ITEM_SCHEDULE_ERROR');
             logger.scheduler(`ITEM_SCHEDULE_ERROR id=${publication.id} product=${product.id} slot=${date}T${time} error=${errorMessage}`, 'warn');
 
-            // A catalog item without a valid pre-generated copy must never abort
-            // the entire monthly cycle. The crawler/AI preparation is responsible
-            // for making the product publish-ready; scheduling simply skips it.
-            if (errorMessage === 'PRODUCT_NOT_READY' || errorMessage === 'FACEBOOK_COPY_SAFETY_GATE_FAILED') {
-              await storage.updatePublication(publication.id, {
-                status: 'failed',
-                error_message: errorMessage,
-                next_attempt_at: undefined
-              });
-              continue;
-            }
-
             if (STRUCTURAL_FACEBOOK_ERRORS.has(errorMessage)) {
               structuralFailure = errorMessage;
               break outer;
