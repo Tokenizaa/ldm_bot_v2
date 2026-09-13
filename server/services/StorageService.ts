@@ -3,8 +3,6 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { Product, Publication, PublicationStatus, PriceHistory, AppSettings, OperationalQuota, DashboardStats } from '../types.js';
 import { logger } from './LoggerService.js';
 import { calculatePublicationIdempotencyKey, normalizeGroupUrl, normalizeScheduledAt, localDateString } from '../utils/idempotency.js';
-import { contentService } from './ContentService.js';
-import { buildAffiliateUrl } from '../utils/affiliate.js';
 
 const DEFAULT_SETTINGS: AppSettings = {
   facebook_group_url: process.env.FACEBOOK_GROUP_URL || '',
@@ -178,21 +176,6 @@ export class StorageService {
     const { error } = await this.supabase.from('affiliate_links').update({ facebook_copy: clean }).eq('id', productId);
     if (error) throw new Error(`Falha ao salvar copy do produto: ${error.message}`);
     return this.getProductById(productId);
-  }
-
-  async validateCatalogIntegrity(): Promise<{ total: number; valid: number; invalid: Array<{ id: string; product_name: string; reason: string; affiliate_url: string }> }> {
-    const products = await this.getProducts(true);
-    const invalid = products.flatMap(product => {
-      const reasons: string[] = [];
-      if (!product.product_name?.trim()) reasons.push('name_missing');
-      if (!product.original_url || !/^https:\/\/www\\.lojadomecanico\\.com\\.br\/produto\\//i.test(product.original_url)) reasons.push('original_url_invalid');
-      const canonical = buildAffiliateUrl(product.original_url || '');
-      if (!product.affiliate_url || product.affiliate_url !== canonical) reasons.push('affiliate_url_non_canonical');
-      if (!product.facebook_copy?.trim()) reasons.push('facebook_copy_missing');
-      else if (!contentService.isPublicationCopySafe(product, product.facebook_copy)) reasons.push(contentService.getPublicationValidationReason(product.facebook_copy, product));
-      return reasons.length ? [{ id: product.id, product_name: product.product_name, reason: reasons.join(','), affiliate_url: product.affiliate_url }] : [];
-    });
-    return { total: products.length, valid: products.length - invalid.length, invalid };
   }
 
   async countProductsWithoutFacebookCopy(): Promise<number> {
