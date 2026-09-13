@@ -4,11 +4,11 @@ import { crawler } from '../services/CrawlerService.js';
 import { contentService } from '../services/ContentService.js';
 import { scheduler } from '../services/RuntimeSchedulerService.js';
 import { facebookSession } from '../services/FacebookSessionService.js';
-import { facebookAutomation } from '../services/FacebookAutomationService.js';
 import { nvidiaAI } from '../services/NvidiaAIService.js';
 import { logger } from '../services/LoggerService.js';
 import { authService } from '../services/AuthService.js';
 import { SUPABASE_SQL_SCHEMA } from '../utils/supabaseSchema.js';
+import { verifyFacebookGroup, publishFacebookTest } from '../services/FacebookAutomationCompatService.js';
 
 export const apiRouter = Router();
 let crawlerRunPromise: Promise<Awaited<ReturnType<typeof crawler.run>>> | null = null;
@@ -35,7 +35,6 @@ apiRouter.post('/crawler/run', async (_req, res) => { if (crawlerRunPromise) ret
 apiRouter.get('/products', async (req, res) => { try { let products = await storage.getProducts(); const search = String(req.query.search || '').toLowerCase(); const category = req.query.category as string | undefined; if (search) products = products.filter(p => p.product_name.toLowerCase().includes(search) || p.brand?.toLowerCase().includes(search) || p.sku?.toLowerCase().includes(search)); if (category) products = products.filter(p => p.category === category); res.json({ success: true, products }); } catch (err: any) { res.status(500).json({ success: false, error: err.message }); } });
 apiRouter.get('/products/:id', async (req, res) => { try { const product = await storage.getProductById(req.params.id); if (!product) return res.status(404).json({ success: false, error: 'Produto não encontrado.' }); res.json({ success: true, product, priceHistory: [] }); } catch (err: any) { res.status(500).json({ success: false, error: err.message }); } });
 
-// Publication state is runtime-only. The database remains a product catalog.
 apiRouter.get('/publications', async (_req, res) => { try { res.json({ success: true, publications: await scheduler.getRuntimePublications() }); } catch (err: any) { res.status(500).json({ success: false, error: err.message }); } });
 apiRouter.post('/publications/generate-copy', async (req, res) => { try { const product = await storage.getProductById(req.body.productId); if (!product) return res.status(404).json({ success: false, error: 'Produto não encontrado.' }); const generated = await contentService.generateCopyForProduct(product); res.json({ success: true, ...generated }); } catch (err: any) { res.status(502).json({ success: false, error: err.message }); } });
 apiRouter.post('/publications', async (req, res) => { try { const { product_id, scheduled_at, content, facebook_group_url } = req.body; if (!product_id || !scheduled_at) return res.status(400).json({ success: false, error: 'product_id e scheduled_at são obrigatórios.' }); const publication = await scheduler.createPublication(product_id, scheduled_at, content, facebook_group_url); res.json({ success: true, publication }); } catch (err: any) { res.status(400).json({ success: false, error: err.message }); } });
@@ -54,8 +53,8 @@ apiRouter.post(['/scheduler/run-due', '/scheduler/process-due'], async (_req, re
 apiRouter.get('/facebook/status', async (_req, res) => { try { res.json({ success: true, ...(await facebookSession.refresh()) }); } catch (err: any) { res.status(500).json({ success: false, error: err.message }); } });
 apiRouter.post('/facebook/connect', async (_req, res) => { try { res.json(await facebookSession.connect()); } catch (err: any) { res.status(500).json({ success: false, error: err.message }); } });
 apiRouter.post('/facebook/verify-session', async (_req, res) => { try { const status = await facebookSession.refresh(); res.json({ success: status.connected, status }); } catch (err: any) { res.status(500).json({ success: false, error: err.message }); } });
-apiRouter.post('/facebook/verify-group', async (req, res) => { try { const settings = await storage.getSettings(); res.json(await facebookAutomation.verifyGroup(req.body.groupUrl || settings.facebook_group_url)); } catch (err: any) { res.status(500).json({ success: false, error: err.message }); } });
-apiRouter.post('/facebook/test-publish', async (req, res) => { try { const settings = await storage.getSettings(); res.json(await facebookAutomation.publishTest(req.body.groupUrl || settings.facebook_group_url)); } catch (err: any) { res.status(500).json({ success: false, error: err.message }); } });
+apiRouter.post('/facebook/verify-group', async (req, res) => { try { const settings = await storage.getSettings(); res.json(await verifyFacebookGroup(req.body.groupUrl || settings.facebook_group_url)); } catch (err: any) { res.status(500).json({ success: false, error: err.message }); } });
+apiRouter.post('/facebook/test-publish', async (req, res) => { try { const settings = await storage.getSettings(); res.json(await publishFacebookTest(req.body.groupUrl || settings.facebook_group_url)); } catch (err: any) { res.status(500).json({ success: false, error: err.message }); } });
 apiRouter.get('/settings', async (_req, res) => { try { res.json({ success: true, settings: await storage.getSettings(), envStatus: { hasNvidiaKey: nvidiaAI.isConfigured(), hasSupabaseUrl: Boolean(process.env.SUPABASE_URL), hasSupabaseKey: Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY), hasSessionSecret: Boolean(process.env.SESSION_SECRET) } }); } catch (err: any) { res.status(500).json({ success: false, error: err.message }); } });
 apiRouter.put('/settings', async (req, res) => { try { res.json({ success: true, settings: await storage.updateSettings(req.body) }); } catch (err: any) { res.status(500).json({ success: false, error: err.message }); } });
 apiRouter.get('/supabase/schema', (_req, res) => res.json({ success: true, schema: SUPABASE_SQL_SCHEMA }));
