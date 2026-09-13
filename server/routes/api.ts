@@ -4,11 +4,11 @@ import { crawler } from '../services/CrawlerService.js';
 import { contentService } from '../services/ContentService.js';
 import { scheduler } from '../services/RuntimeSchedulerService.js';
 import { facebookSession } from '../services/FacebookSessionService.js';
+import { facebookAutomation } from '../services/FacebookAutomationService.js';
 import { nvidiaAI } from '../services/NvidiaAIService.js';
 import { logger } from '../services/LoggerService.js';
 import { authService } from '../services/AuthService.js';
 import { SUPABASE_SQL_SCHEMA } from '../utils/supabaseSchema.js';
-import { verifyFacebookGroup, publishFacebookTest } from '../services/FacebookAutomationCompatService.js';
 
 export const apiRouter = Router();
 let crawlerRunPromise: Promise<Awaited<ReturnType<typeof crawler.run>>> | null = null;
@@ -53,8 +53,8 @@ apiRouter.post(['/scheduler/run-due', '/scheduler/process-due'], async (_req, re
 apiRouter.get('/facebook/status', async (_req, res) => { try { res.json({ success: true, ...(await facebookSession.refresh()) }); } catch (err: any) { res.status(500).json({ success: false, error: err.message }); } });
 apiRouter.post('/facebook/connect', async (_req, res) => { try { res.json(await facebookSession.connect()); } catch (err: any) { res.status(500).json({ success: false, error: err.message }); } });
 apiRouter.post('/facebook/verify-session', async (_req, res) => { try { const status = await facebookSession.refresh(); res.json({ success: status.connected, status }); } catch (err: any) { res.status(500).json({ success: false, error: err.message }); } });
-apiRouter.post('/facebook/verify-group', async (req, res) => { try { const settings = await storage.getSettings(); res.json(await verifyFacebookGroup(req.body.groupUrl || settings.facebook_group_url)); } catch (err: any) { res.status(500).json({ success: false, error: err.message }); } });
-apiRouter.post('/facebook/test-publish', async (req, res) => { try { const settings = await storage.getSettings(); res.json(await publishFacebookTest(req.body.groupUrl || settings.facebook_group_url)); } catch (err: any) { res.status(500).json({ success: false, error: err.message }); } });
+apiRouter.post('/facebook/verify-group', async (req, res) => { try { const settings = await storage.getSettings(); res.json(await facebookAutomation.verifyGroup(req.body.groupUrl || settings.facebook_group_url)); } catch (err: any) { res.status(500).json({ success: false, error: err.message }); } });
+apiRouter.post('/facebook/test-publish', async (req, res) => { try { const settings = await storage.getSettings(); res.json(await facebookAutomation.publishTest(req.body.groupUrl || settings.facebook_group_url)); } catch (err: any) { res.status(500).json({ success: false, error: err.message }); } });
 apiRouter.get('/settings', async (_req, res) => { try { res.json({ success: true, settings: await storage.getSettings(), envStatus: { hasNvidiaKey: nvidiaAI.isConfigured(), hasSupabaseUrl: Boolean(process.env.SUPABASE_URL), hasSupabaseKey: Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY), hasSessionSecret: Boolean(process.env.SESSION_SECRET) } }); } catch (err: any) { res.status(500).json({ success: false, error: err.message }); } });
 apiRouter.put('/settings', async (req, res) => { try { res.json({ success: true, settings: await storage.updateSettings(req.body) }); } catch (err: any) { res.status(500).json({ success: false, error: err.message }); } });
 apiRouter.get('/supabase/schema', (_req, res) => res.json({ success: true, schema: SUPABASE_SQL_SCHEMA }));
