@@ -109,11 +109,6 @@ class FacebookAutomationService {
     }
   }
 
-  private async waitForComposerToClose(page: Page, timeoutMs = 10000) {
-    const composerDialog = page.locator("div[role='dialog'][aria-label='Criar post']:visible");
-    await composerDialog.waitFor({ state: 'hidden', timeout: timeoutMs });
-  }
-
   private async cleanupFailedSchedule(page: Page) {
     await this.closeResidualDialogs(page);
     const remaining = page.locator("div[role='dialog']:visible");
@@ -124,19 +119,56 @@ class FacebookAutomationService {
     }
   }
 
-  private async openComposer(execId: string, page: Page, _groupUrl: string) {
+  private async waitForComposer(execId: string, page: Page, groupUrl: string): Promise<Locator> {
+    const trigger = this.composer(page);
+    try {
+      await trigger.waitFor({ state: 'visible', timeout: 12000 });
+      this.log(execId, 'COMPOSER_TRIGGER_FOUND', 'trigger canônico encontrado');
+      return trigger;
+    } catch {
+      await page.reload({ waitUntil: 'domcontentloaded', timeout: 60000 });
+      await this.waitForGroupReady(execId, page, groupUrl);
+      const recovered = this.composer(page);
+      await recovered.waitFor({ state: 'visible', timeout: 12000 });
+      this.log(execId, 'COMPOSER_TRIGGER_FOUND', 'trigger canônico encontrado após recuperação da página');
+      return recovered;
+    }
+  }
+
+  private async waitForComposerReady(execId: string, page: Page): Promise<Locator> {
+    const dialog = page.locator("div[role='dialog'][aria-label='Criar post']:visible");
+    await dialog.waitFor({ state: 'visible', timeout: 12000 });
+    this.log(execId, 'CRIAR_POST_DIALOG_OPEN', 'dialog Criar post visível');
+    const editor = this.editor(page);
+    await editor.waitFor({ state: 'visible', timeout: 12000 });
+    await editor.click({ timeout: this.interactionTimeoutMs });
+    this.log(execId, 'EDITOR_READY', 'editor Lexical visível e interagível');
+    return dialog;
+  }
+
+  private async openComposer(execId: string, page: Page, groupUrl: string) {
     const existing = page.locator("div[role='dialog'][aria-label='Criar post']:visible");
     if (await existing.count().catch(() => 0)) {
+      const existingEditor = this.editor(page);
+      if (await existingEditor.isVisible().catch(() => false)) {
+        this.log(execId, 'COMPOSER_READY', 'dialog canônico já operacional');
+        await existingEditor.click({ timeout: this.interactionTimeoutMs });
+        return;
+      }
       await page.keyboard.press('Escape').catch(() => undefined);
-      await this.waitForComposerToClose(page, 8000);
+      await page.waitForTimeout(250);
     }
-    await this.closeResidualDialogs(page);
-    const trigger = this.composer(page);
-    await trigger.waitFor({ state: 'visible', timeout: 12000 });
+
+    const residuals = page.locator("div[role='dialog']:visible");
+    if (await residuals.count().catch(() => 0)) {
+      await page.keyboard.press('Escape').catch(() => undefined);
+      await page.waitForTimeout(250);
+    }
+
+    const trigger = await this.waitForComposer(execId, page, groupUrl);
     await trigger.click({ timeout: this.interactionTimeoutMs });
-    await page.locator("div[role='dialog'][aria-label='Criar post']:visible").waitFor({ state: 'visible', timeout: 12000 });
-    await this.editor(page).waitFor({ state: 'visible', timeout: 12000 });
-    this.log(execId, 'COMPOSER_READY', 'dialog canônico aberto e limpo');
+    this.log(execId, 'COMPOSER_TRIGGER_CLICKED', 'trigger canônico clicado');
+    await this.waitForComposerReady(execId, page);
   }
 
   private async waitForEditorStable(page: Page, token: string) {
@@ -293,6 +325,11 @@ class FacebookAutomationService {
     } catch {
       return { found: false, plannerUrl, verified: false };
     }
+  }
+
+  private async waitForComposerToClose(page: Page, timeoutMs = 10000) {
+    const composerDialog = page.locator("div[role='dialog'][aria-label='Criar post']:visible");
+    await composerDialog.waitFor({ state: 'hidden', timeout: timeoutMs });
   }
 
   private async confirmAndVerify(execId: string, page: Page, groupUrl: string, content: string, date: string, time: string, productName?: string): Promise<FacebookScheduleResult> {
