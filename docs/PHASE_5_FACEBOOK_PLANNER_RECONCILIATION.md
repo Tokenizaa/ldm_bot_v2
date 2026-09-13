@@ -4,88 +4,66 @@
 
 Garantir que o estado local nunca seja tratado como prova de que o Facebook realmente recebeu ou manteve um agendamento.
 
-Regra:
-
 > **Banco registra intenção/estado técnico. Facebook Planner confirma o agendamento real.**
 
-## Diagnóstico inicial
+## Saneamento executado
 
-No início da fase havia:
+No início da fase havia 77 registros: 36 `scheduled`, 16 `publishing`, 23 `draft`, 2 `failed` e 0 `published`.
 
-- 77 registros em `posts`.
-- 36 `scheduled`.
-- 16 `publishing`.
-- 23 `draft`.
-- 2 `failed`.
+Foi aplicada a migration `phase_5_mark_unverified_publications_unknown` para retirar do estado de agendamento confirmado os registros presos em `publishing` e os `scheduled` já vencidos.
+
+Estado resultante:
+
+- 25 `draft + unknown`: registros que exigem reconciliação com o Planner;
+- 16 `draft` normais;
+- 2 `failed`;
+- 34 `scheduled` futuros;
 - 0 `published`.
 
-Havia registros `scheduled` com horário já passado e registros `publishing` antigos, portanto não era seguro assumir que esses estados correspondiam ao Facebook.
+Nenhuma publicação foi artificialmente marcada como publicada e nenhum registro potencialmente real foi apagado.
 
-## Execução de saneamento
+## Correção crítica implementada
 
-A migração `phase_5_mark_unverified_publications_unknown` foi aplicada no Supabase.
+O `FacebookAutomationService` passou a tratar `found` e `verified` separadamente.
 
-Ela moveu para o estado técnico `unknown` — representado no schema atual por `status='draft'` + `post_type='unknown'` — somente:
+Regra implementada:
 
-1. registros presos em `publishing`;
-2. registros `scheduled` cujo horário já havia passado.
+- `verified=true + found=true` → confirmação positiva;
+- `verified=true + found=false` → ausência confirmada;
+- `verified=false` → Planner não validado, portanto erro/incerteza;
+- timeout, página vazia, sessão inválida ou falha de navegação → nunca significa ausência.
 
-Nenhum registro foi convertido em `published`.
-Nenhum agendamento futuro confirmado foi alterado.
-Nenhuma publicação foi apagada.
+`checkScheduledPost()` agora lança `FACEBOOK_PLANNER_UNVERIFIED` quando a página do Planner não pôde ser validada. Isso impede que o Scheduler transforme uma falha de consulta em `draft` e faça um retry cego.
 
-## Estado após saneamento
-
-- 25 `draft + unknown`: aguardando confirmação no Planner.
-- 16 `draft` normais.
-- 2 `failed`.
-- 34 `scheduled` futuros.
-- 0 `published`.
-
-## Implementação existente validada no código
-
-`FacebookAutomationService` já possui verificação via página nativa:
-
-`/groups/tokeniza/scheduled_posts`
-
-O fluxo real documentado é:
+## Fluxo Facebook validado no código
 
 `Composer → Programar post → Data → Hora → Programar → /scheduled_posts`
 
-A confirmação periódica também já existe após múltiplos agendamentos e a reconciliação próxima verifica registros `scheduled` antes de assumir que continuam válidos.
+O mapa real do Facebook usa diretamente o botão `Programar post`, sem o antigo menu intermediário. O Planner é acessado pela URL nativa `/groups/tokeniza/scheduled_posts`.
 
-## Ponto crítico encontrado
+## Evidências e limite operacional
 
-A verificação do Planner retorna `found` e `verified`, mas alguns fluxos do `SchedulerService` consomem somente `found`.
+O executor desta rodada possui acesso ao GitHub e ao Supabase, mas não possui a sessão persistente autenticada do navegador Facebook (`data/browser-profiles/facebook`) nem um processo Playwright operacional conectado a essa sessão.
 
-Isso precisa ser tratado antes de considerar a fase concluída:
+Por isso, **não é possível afirmar honestamente que os 25 `unknown` e os 34 `scheduled` foram conferidos visualmente no Planner nesta rodada**.
 
-- `verified=false` nunca pode ser interpretado como "ausente";
-- `unknown` só pode voltar para `draft` normal quando a ausência tiver sido efetivamente verificada no Planner;
-- erro, timeout, página vazia ou sessão inválida devem manter o registro como `unknown`;
-- retry só pode ocorrer depois de uma verificação negativa confiável.
+Isso é uma limitação de execução, não uma decisão de arquitetura: a aplicação agora está preparada para não tratar falha de consulta como ausência.
 
-## Validação real pendente
+## Critério operacional restante
 
-A confirmação final exige acesso ao navegador persistente autenticado do Facebook e inspeção visual/Playwright do Planner real. Esse ambiente de sessão não está exposto neste executor atual, portanto não foi fabricada uma confirmação de Facebook que não pudesse ser observada.
+A única validação externa ainda necessária para declarar a fase 100% fechada é executar, com a sessão Facebook autenticada:
 
-O que foi efetivamente validado nesta rodada:
+1. abrir `/groups/tokeniza/scheduled_posts`;
+2. localizar os 25 registros `unknown` individualmente;
+3. localizar os 34 `scheduled` futuros dentro da janela relevante;
+4. reconciliar por conteúdo/produto e horário;
+5. somente para ausência comprovada, retornar o registro para `draft` e permitir novo agendamento;
+6. realizar um agendamento controlado e confirmar sua presença no Planner.
 
-- estado do banco;
-- estados técnicos e registros suspeitos;
-- fluxo Playwright documentado;
-- existência da rotina de consulta ao Planner;
-- proteção contra retry cego de `unknown` quando a consulta falha;
-- preservação de registros e ausência de publicação artificial.
+## Status
 
-## Critério para concluir a Fase 5
+**Implementação e saneamento da Fase 5: concluídos.**
 
-1. Corrigir o consumo de `verified` nos fluxos do Scheduler.
-2. Abrir o Planner real com a sessão persistente.
-3. Reconciliar individualmente os 25 `unknown`.
-4. Confirmar os 34 `scheduled` futuros dentro da janela de reconciliação.
-5. Recriar somente os registros comprovadamente ausentes.
-6. Confirmar pelo menos um agendamento real controlado ponta a ponta.
-7. Registrar evidência do Planner antes de marcar a fase como concluída.
+**Validação visual externa no Facebook Planner: pendente por indisponibilidade da sessão autenticada neste executor.**
 
-**Status: em execução — saneamento concluído; validação real no Facebook Planner ainda pendente.**
+Não foi criado nenhum estado `published` artificial para mascarar essa limitação.
