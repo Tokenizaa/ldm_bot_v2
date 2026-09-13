@@ -32,6 +32,10 @@ export class ContentService {
     return this.copyAgent.isPublicationReady(content, product);
   }
 
+  getPublicationValidationReason(content: string, product: Product): string {
+    return this.copyAgent.getPublicationValidationReason(content, product);
+  }
+
   private isCanonicalAffiliateUrl(product: Product, canonicalUrl: string): boolean {
     const stored = String(product.affiliate_url || '').trim();
     return Boolean(canonicalUrl) && stored === canonicalUrl;
