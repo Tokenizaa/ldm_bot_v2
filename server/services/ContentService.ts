@@ -32,6 +32,10 @@ export class ContentService {
     return this.copyAgent.isPublicationReady(content, product);
   }
 
+  repairCatalogCopy(product: Product): string {
+    return this.copyAgent.repairDeterministicCopy(product);
+  }
+
   getPublicationValidationReason(content: string, product: Product): string {
     return this.copyAgent.getPublicationValidationReason(content, product);
   }
