@@ -3,8 +3,12 @@ import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import 'dotenv/config';
 import { logger } from './server/services/LoggerService.js';
+import { installCatalogOnlyStorageGuard } from './server/services/CatalogOnlyStorageGuard.js';
 
 async function startServer() {
+  // Install the catalog-only boundary before routes/services are initialized.
+  installCatalogOnlyStorageGuard();
+
   const { apiRouter } = await import('./server/routes/api.js');
   const { authRouter } = await import('./server/routes/auth.js');
   const { frontendCompatRouter } = await import('./server/routes/frontend-compat.js');
@@ -34,7 +38,7 @@ async function startServer() {
 
   app.listen(PORT, '0.0.0.0', () => {
     logger.system(`ForgeDeals Server running on http://0.0.0.0:${PORT}`);
-    // The scheduler keeps publication state only in memory. Startup never creates DB publication rows.
+    // Runtime scheduler state is intentionally volatile and never persisted as publication rows.
     void scheduler.start();
   });
 }
