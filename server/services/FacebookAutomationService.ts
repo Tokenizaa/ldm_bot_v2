@@ -64,7 +64,11 @@ class FacebookAutomationService {
   }
 
   private editor(page: Page): Locator {
-    return page.locator('[role="dialog"] [data-lexical-editor="true"][contenteditable="true"]:not([aria-label*="Comente" i]),[role="dialog"] [contenteditable="true"][role="textbox"]:not([aria-label*="Comente" i]),div[role="dialog"] [role="textbox"]').first();
+    return page.locator("div[role='dialog'][aria-label='Criar post']:visible [role='textbox']:visible").first();
+  }
+
+  private scheduleDialog(page: Page): Locator {
+    return page.locator("[role='dialog']:visible").filter({ has: page.getByRole('combobox', { name: /Abrir seletor de data/ }) }).first();
   }
 
   private isGroupPage(page: Page, groupUrl: string) {
@@ -97,33 +101,30 @@ class FacebookAutomationService {
   }
 
   private async closeResidualDialogs(page: Page) {
-    const dialogs = page.locator("div[role='dialog']:visible");
-    const count = await dialogs.count().catch(() => 0);
-    for (let i = count - 1; i >= 0; i--) {
-      const dialog = dialogs.nth(i);
-      const label = await dialog.getAttribute('aria-label').catch(() => '');
-      if (label !== 'Criar post') {
-        await page.keyboard.press('Escape').catch(() => undefined);
-        break;
-      }
-    }
-  }
-
-  private async cleanupFailedSchedule(page: Page) {
-    for (let i = 0; i < 3; i++) {
-      const visibleDialogs = await page.locator("div[role='dialog']:visible").count().catch(() => 0);
-      if (!visibleDialogs) return;
+    for (let i = 0; i < 4; i++) {
+      const dialogs = page.locator("div[role='dialog']:visible");
+      if (!(await dialogs.count().catch(() => 0))) return;
       await page.keyboard.press('Escape').catch(() => undefined);
       await page.waitForTimeout(250);
     }
   }
 
-  private async openComposer(execId: string, page: Page, groupUrl: string) {
-    const canonical = page.locator("div[role='dialog'][aria-label='Criar post']:visible");
-    if (await canonical.count().catch(() => 0)) {
-      await this.editor(page).waitFor({ state: 'visible', timeout: 5000 });
-      this.log(execId, 'COMPOSER_READY', 'dialog canônico já renderizado');
-      return;
+  private async cleanupFailedSchedule(page: Page) {
+    await this.closeResidualDialogs(page);
+    const remaining = page.locator("div[role='dialog']:visible");
+    if (await remaining.count().catch(() => 0)) {
+      const editor = this.editor(page);
+      if (await editor.count().catch(() => 0)) await editor.fill('').catch(() => undefined);
+      await page.keyboard.press('Escape').catch(() => undefined);
+    }
+  }
+
+  private async openComposer(execId: string, page: Page, _groupUrl: string) {
+    // Every schedule starts from a clean composer. Never reuse a failed/stale post.
+    const existing = page.locator("div[role='dialog'][aria-label='Criar post']:visible");
+    if (await existing.count().catch(() => 0)) {
+      await page.keyboard.press('Escape').catch(() => undefined);
+      await existing.waitFor({ state: 'hidden', timeout: 5000 }).catch(() => undefined);
     }
     await this.closeResidualDialogs(page);
     const trigger = this.composer(page);
@@ -131,7 +132,7 @@ class FacebookAutomationService {
     await trigger.click({ timeout: this.interactionTimeoutMs });
     await page.locator("div[role='dialog'][aria-label='Criar post']:visible").waitFor({ state: 'visible', timeout: 12000 });
     await this.editor(page).waitFor({ state: 'visible', timeout: 12000 });
-    this.log(execId, 'COMPOSER_READY', 'dialog canônico aberto');
+    this.log(execId, 'COMPOSER_READY', 'dialog canônico aberto e limpo');
   }
 
   private async waitForEditorStable(page: Page, token: string) {
@@ -164,7 +165,7 @@ class FacebookAutomationService {
   }
 
   private async activateToken(execId: string, page: Page, token: string, requireOption: boolean) {
-    const options = page.locator("[role='option']:visible");
+    const options = page.locator("div[role='dialog'][aria-label='Criar post']:visible [role='option']:visible");
     if (requireOption) await options.first().waitFor({ state: 'visible', timeout: this.tokenActivationTimeoutMs });
     await this.waitForEditorStable(page, token);
     await page.waitForTimeout(this.tokenActivationDelayMs);
@@ -238,15 +239,11 @@ class FacebookAutomationService {
   }
 
   private async openScheduleDirect(execId: string, page: Page) {
-    const button = page.locator("[aria-label='Programar post']:visible").last();
+    const button = page.locator("div[role='dialog'][aria-label='Criar post']:visible [aria-label='Programar post']").last();
     await button.waitFor({ state: 'visible', timeout: 12000 });
-    const options = page.locator("[role='option']:visible");
-    if (await options.count().catch(() => 0)) {
-      await page.keyboard.press('Enter');
-      await this.waitForVisibleOptionsToClose(page, 3000);
-    }
+    // Do not press Enter on unrelated role=option elements. The canonical flow is a direct click.
     await button.click({ timeout: this.interactionTimeoutMs });
-    const dialog = page.locator("[role='dialog']:visible").filter({ has: page.getByRole('combobox', { name: /Abrir seletor de data/ }) }).first();
+    const dialog = this.scheduleDialog(page);
     await dialog.waitFor({ state: 'visible', timeout: 12000 });
   }
 
@@ -258,18 +255,22 @@ class FacebookAutomationService {
     const monthLong = target.toLocaleDateString('pt-BR', { month: 'long' });
     const year = String(target.getFullYear());
     const datePattern = new RegExp(`${day} de ${monthLong} de ${year}`, 'i');
-    const cell = page.getByRole('gridcell', { name: datePattern }).first();
+    const scheduleDialog = this.scheduleDialog(page);
+    await scheduleDialog.waitFor({ state: 'visible', timeout: this.calendarTimeoutMs });
+    const cell = scheduleDialog.getByRole('gridcell', { name: datePattern }).first();
     await cell.waitFor({ state: 'visible', timeout: this.calendarTimeoutMs });
     await cell.click({ timeout: this.interactionTimeoutMs });
-    this.log(execId, 'DATE_READY', `date=${date} mode=canonical-gridcell`);
+    this.log(execId, 'DATE_READY', `date=${date} mode=canonical-gridcell-scoped`);
   }
 
   private async setTime(execId: string, page: Page, time: string) {
     if (!/^\d{2}:\d{2}$/.test(time)) throw new Error('FACEBOOK_TIME_INVALID');
-    const option = page.locator("[role='option']:visible").filter({ hasText: time }).first();
+    const scheduleDialog = this.scheduleDialog(page);
+    await scheduleDialog.waitFor({ state: 'visible', timeout: this.calendarTimeoutMs });
+    const option = scheduleDialog.locator("[role='option']:visible").filter({ hasText: time }).first();
     await option.waitFor({ state: 'visible', timeout: this.calendarTimeoutMs });
     await option.click({ timeout: this.interactionTimeoutMs });
-    this.log(execId, 'TIME_READY', `time=${time}`);
+    this.log(execId, 'TIME_READY', `time=${time} mode=canonical-option-scoped`);
   }
 
   private async checkPostInPlanner(page: Page, groupUrl: string, content: string, _date: string, _time: string, productName?: string): Promise<PlannerCheckResult> {
