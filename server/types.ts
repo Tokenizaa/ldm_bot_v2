@@ -19,6 +19,7 @@ export interface Product {
 }
 
 export type PublicationStatus = 'draft' | 'attempting' | 'facebook_submitted' | 'scheduled' | 'publishing' | 'published' | 'failed' | 'unknown' | 'cancelled';
+export type PublicationBusinessStatus = 'not_published' | 'published';
 
 export interface Publication {
   id: string;
@@ -26,6 +27,7 @@ export interface Publication {
   product?: Product;
   scheduled_at: string;
   status: PublicationStatus;
+  business_status?: PublicationBusinessStatus;
   content: string;
   facebook_group_url?: string;
   facebook_post_url?: string;
@@ -38,6 +40,10 @@ export interface Publication {
   next_attempt_at?: string;
   created_at: string;
   updated_at: string;
+}
+
+export function getPublicationBusinessStatus(publication: Pick<Publication, 'status'>): PublicationBusinessStatus {
+  return publication.status === 'published' ? 'published' : 'not_published';
 }
 
 export interface PriceHistory {
