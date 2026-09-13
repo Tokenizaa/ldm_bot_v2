@@ -169,7 +169,7 @@ class FacebookAutomationService {
   }
 
   private async activateToken(execId: string, page: Page, token: string, requireOption: boolean) {
-    const options = page.locator("div[role='dialog'][aria-label='Criar post']:visible [role='option']:visible");
+    const options = page.locator("[role='option']:visible");
     if (requireOption) await options.first().waitFor({ state: 'visible', timeout: this.tokenActivationTimeoutMs });
     await this.waitForEditorStable(page, token);
     await page.waitForTimeout(this.tokenActivationDelayMs);
