@@ -96,14 +96,41 @@ Uma barreira de segurança pode continuar existindo no backend, mas não deve ma
 
 A fase só é concluída quando produtos, links e conteúdo estiverem reconciliados; o fluxo crawler → banco → scheduler estiver coerente; `published` continuar representando somente publicação real; e não existirem inconsistências conhecidas que contaminem a futura reconciliação do Planner.
 
+**Status: concluída.**
+
 ## Fase 5 — Facebook Planner
 
-- Auditar criação, confirmação e reconciliação dos agendamentos.
-- Garantir que `scheduled` corresponda a um agendamento verificável no Planner.
-- Reconciliar registros existentes sem apagar evidências.
-- Tratar ausentes como candidatos a recriação segura.
-- Preservar sessão persistente, locks, pacing e reconciliação periódica.
-- Executar teste real controlado.
+### Objetivo
+
+Reconciliar o estado local com o Planner nativo do Facebook sem transformar intenção local em prova de publicação.
+
+### Execução realizada
+
+- Auditado o fluxo Playwright documentado para `https://www.facebook.com/groups/tokeniza/scheduled_posts`.
+- Confirmado no código que o executor usa o fluxo nativo `Composer → Programar post → Data → Hora → Programar`.
+- Confirmada rotina de consulta ao Planner e verificação periódica.
+- Identificados 16 registros presos em `publishing` e 2 registros `scheduled` já passados sem evidência persistida.
+- Esses 18 registros foram movidos para o estado técnico `unknown`, representado pelo schema como `draft + post_type='unknown'`.
+- Nenhum registro foi marcado como `published`.
+- Nenhum agendamento futuro confirmado foi apagado.
+- O banco passou a conter 25 registros `unknown`, 16 `draft`, 2 `failed` e 34 `scheduled` futuros.
+
+### Correção obrigatória antes do fechamento
+
+A rotina `checkPostInPlanner()` retorna `found` e `verified`, mas parte do Scheduler consome somente `found`.
+
+A regra final precisa ser:
+
+- `verified=false` → manter `unknown`; nunca interpretar como ausência.
+- `verified=true + found=true` → confirmar `scheduled`.
+- `verified=true + found=false` → ausência confirmada; liberar recriação segura.
+- timeout, erro, sessão inválida ou página vazia → manter `unknown`.
+
+### Validação real pendente
+
+A validação final precisa usar a sessão persistente autenticada do Facebook e reconciliar os registros individualmente no Planner. O ambiente de sessão autenticado não está exposto ao executor desta rodada; portanto nenhuma confirmação de Facebook foi inventada.
+
+**Status: em execução — saneamento concluído; validação real e ajuste final do consumo de `verified` ainda pendentes.**
 
 ## Fase 6 — Sitemap e publicação pública
 
