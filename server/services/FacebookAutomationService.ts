@@ -40,17 +40,49 @@ class FacebookAutomationService {
   private async openScheduleDirect(execId:string,page:Page){const button=page.locator("[aria-label='Programar post']:visible").last();await button.waitFor({state:'visible',timeout:12000});await this.resolveMentionTypeahead(execId,page);try{await button.click({timeout:8000});}catch{await button.click({timeout:this.interactionTimeoutMs,force:true});}const dialog=page.locator("[role='dialog']:visible").filter({has:page.getByRole('combobox',{name:/Abrir seletor de data/})}).first();await dialog.waitFor({state:'visible',timeout:12000});}
   private async openDatePicker(page:Page,trigger:Locator){if(await page.locator("[role='gridcell']:visible").count().catch(()=>0)>0)return;await trigger.click({timeout:this.interactionTimeoutMs}).catch(async()=>trigger.click({force:true,timeout:this.interactionTimeoutMs}));await page.locator("[role='gridcell']:visible").first().waitFor({state:'visible',timeout:this.calendarTimeoutMs});}
   private async setDate(execId:string,page:Page,date:string){
-    if(!/^\d{4}-\d{2}-\d{2}$/.test(date))throw new Error('FACEBOOK_DATE_INVALID');
+    if(!/^\\d{4}-\\d{2}-\\d{2}$/.test(date))throw new Error('FACEBOOK_DATE_INVALID');
     const target=new Date(date+'T12:00:00-03:00');
     if(Number.isNaN(target.getTime())||target.getTime()<=Date.now())throw new Error('FACEBOOK_SCHEDULE_IN_PAST');
     const day=String(target.getDate()),year=String(target.getFullYear());
     const monthLong=target.toLocaleDateString('pt-BR',{month:'long'});
-    const monthShort=target.toLocaleDateString('pt-BR',{month:'short'}).replace(/\.$/,'');
+    const monthShort=target.toLocaleDateString('pt-BR',{month:'short'}).replace(/\\.$/,'');
+    const canonicalLabel=`${day} de ${monthShort} de ${year}`;
+
+    // Canonical flow: Facebook's date control is editable. Prefer typing the
+    // exact human-readable date instead of navigating the calendar month by month.
     const trigger=page.getByRole('button',{name:/Abrir seletor de data/}).or(page.getByRole('combobox',{name:/Abrir seletor de data/})).first();
-    await trigger.waitFor({state:'visible',timeout:12000});
+    await trigger.waitFor({state:'visible',timeout:8000});
+
+    const dialog=page.locator("[role='dialog']:visible").last();
+    const inputs=dialog.locator("input:visible").filter({hasNot:page.locator("[type='time']")});
+    const inputCount=await inputs.count().catch(()=>0);
+    for(let i=0;i<inputCount;i++){
+      const input=inputs.nth(i);
+      const type=await input.getAttribute('type').catch(()=>null);
+      const aria=(await input.getAttribute('aria-label').catch(()=>''))||'';
+      const placeholder=(await input.getAttribute('placeholder').catch(()=>''))||'';
+      const value=await input.inputValue().catch(()=>'');
+      if(type==='date'||/data|date/i.test(aria+' '+placeholder)||/\\d{1,2} de \\w+ de \\d{4}/i.test(value)){
+        const formats=[canonicalLabel,`${day} de ${monthLong} de ${year}`,date];
+        for(const formatted of formats){
+          try{
+            await input.fill(formatted);
+            await page.keyboard.press('Tab').catch(()=>undefined);
+            await page.waitForTimeout(250);
+            const resulting=await input.inputValue().catch(()=>'');
+            if(resulting===date||resulting.toLowerCase().includes(monthShort.toLowerCase())||resulting.includes(String(day))){
+              this.log(execId,'DATE_READY',`date=${date} input="${formatted}" mode=canonical-input`);
+              return;
+            }
+          }catch{}
+        }
+      }
+    }
+
+    // Fallback only when Facebook exposes no editable date field.
     await this.openDatePicker(page,trigger);
     const cells=page.locator("[role='gridcell']:visible");
-    const pattern=new RegExp('\\b'+day+' de (?:'+monthLong+'|'+monthShort+') de '+year+'\\b','i');
+    const pattern=new RegExp('\\\\b'+day+' de (?:'+monthLong+'|'+monthShort+') de '+year+'\\\\b','i');
     const count=await cells.count().catch(()=>0);
     for(let i=0;i<count;i++){
       const candidate=cells.nth(i);
@@ -58,7 +90,7 @@ class FacebookAutomationService {
       const text=await candidate.innerText().catch(()=>'')||'';
       if(!pattern.test(aria+' '+text))continue;
       if(await candidate.getAttribute('aria-disabled').catch(()=>null)==='true')continue;
-      this.log(execId,'DATE_READY',`date=${date} enabled=true format=canonical-accessible-name`);
+      this.log(execId,'DATE_READY',`date=${date} enabled=true mode=calendar-fallback`);
       await candidate.click({timeout:this.interactionTimeoutMs});
       return;
     }
