@@ -66,8 +66,6 @@ export class RuntimeSchedulerService {
         logger.scheduler('RUNTIME_SCHEDULER_READY Facebook não autenticado; agendamento aguardará conexão.', 'warn');
       } else {
         logger.scheduler('RUNTIME_SCHEDULER_READY catálogo carregado sob demanda; nenhum agendamento é persistido no banco.');
-        // Preserve the previous runtime behavior: once Facebook is ready, immediately
-        // advance into the scheduling cycle. Publication state remains memory-only.
         await this.timedStage('ensureMonthlySchedule', () => this.ensureMonthlySchedule());
       }
       logger.scheduler(`[Timing] END scheduler.start durationMs=${Date.now() - startedAt}`);
