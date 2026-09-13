@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import { crawler } from '../server/services/CrawlerService.js';
 import { storage } from '../server/services/StorageService.js';
+import { buildAffiliateUrl } from '../server/utils/affiliate.js';
 
 async function main() {
   const result = await crawler.run();
@@ -10,7 +11,11 @@ async function main() {
     p.original_url &&
     p.current_price > 0 &&
     /^https:\/\/www\.lojadomecanico\.com\.br\/produto\//i.test(p.original_url) &&
-    p.affiliate_url?.endsWith('/20889') &&
+    buildAffiliateUrl(p.original_url) === p.affiliate_url &&
+    p.affiliate_url?.includes('/20889?afiliado=') &&
+    !p.affiliate_url?.includes('utm_campaign=') &&
+    !p.affiliate_url?.includes('utm_source=') &&
+    !p.affiliate_url?.includes('utm_medium=') &&
     Boolean(p.facebook_copy?.trim())
   );
   const distinctUrls = new Set(valid.map(p => p.original_url));
