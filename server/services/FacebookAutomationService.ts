@@ -389,9 +389,18 @@ class FacebookAutomationService {
     await trigger.click({ timeout: this.interactionTimeoutMs }).catch(async () => {
       await trigger.click({ force: true, timeout: this.interactionTimeoutMs });
     });
+
     const options = page.locator("[role='option']:visible");
     const exact = page.getByRole('option', { name: time, exact: true });
-    const candidates = [exact, options.filter({ hasText: new RegExp(`^\\s*${time}\\s*$`) }).last(), options.filter({ hasText: time }).last()];
+    const candidates = [
+      exact,
+      options.filter({ hasText: new RegExp(`^\\s*${time}\\s*$`) }).last(),
+      options.filter({ hasText: time }).last(),
+      page.getByText(time, { exact: true }).last(),
+      page.locator("[role='menuitem']:visible").filter({ hasText: new RegExp(`^\\s*${time}\\s*$`) }).last(),
+      page.locator("button:visible").filter({ hasText: new RegExp(`^\\s*${time}\\s*$`) }).last(),
+    ];
+
     for (const option of candidates) {
       if (await option.count().catch(() => 0) === 0) continue;
       if (!await option.isVisible().catch(() => false)) continue;
@@ -407,9 +416,31 @@ class FacebookAutomationService {
           await this.waitForVisibleOptionsToClose(page, 3000);
           this.log(execId, 'TIME_READY', `time=${time} mode=canonical-option-force`);
           return;
-        } catch { /* try next Facebook option representation */ }
+        } catch { /* try next Facebook time representation */ }
       }
     }
+
+    const inputs = scheduleDialog.locator('input:visible');
+    const inputCount = await inputs.count().catch(() => 0);
+    for (let i = 0; i < inputCount; i++) {
+      const input = inputs.nth(i);
+      const type = await input.getAttribute('type').catch(() => null);
+      const aria = await input.getAttribute('aria-label').catch(() => '') || '';
+      const placeholder = await input.getAttribute('placeholder').catch(() => '') || '';
+      const value = await input.inputValue().catch(() => '');
+      if (type !== 'time' && !/hora|time/i.test(`${aria} ${placeholder}`) && !/^\d{1,2}:\d{2}$/.test(value)) continue;
+      try {
+        await input.fill(time);
+        await page.keyboard.press('Tab').catch(() => undefined);
+        await page.waitForTimeout(250);
+        const resulting = await input.inputValue().catch(() => '');
+        if (resulting === time || resulting.includes(time)) {
+          this.log(execId, 'TIME_READY', `time=${time} mode=canonical-input`);
+          return;
+        }
+      } catch { /* try next native time input */ }
+    }
+
     throw new Error('FACEBOOK_TIME_OPTION_NOT_FOUND');
   }
 
