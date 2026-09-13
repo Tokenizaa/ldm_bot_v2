@@ -1,23 +1,34 @@
 /**
- * Helper to normalize URLs and enforce the Loja do Mecânico /20889 affiliate format.
+ * Canonical Loja do Mecânico affiliate URL builder.
+ *
+ * Publication format:
+ *   <normalized-product-path>/<AFFILIATE_ID>?afiliado=<GLOBAL_CODE>
+ *
+ * The UTM URL supplied by the affiliate dashboard is intentionally not used
+ * for Facebook publication because the tested `afiliado` query format keeps
+ * the affiliate tracking signal while producing the expected Facebook card.
  */
 
-export const AFFILIATE_ID = '20889';
+export const AFFILIATE_ID = process.env.AFFILIATE_ID?.trim() || '20889';
+export const AFFILIATE_GLOBAL_CODE = process.env.AFFILIATE_GLOBAL_CODE?.trim() || '0S7w4Sy5S12oCKmeTo3Z3g==';
 
 /**
- * Normalizes an original URL by removing query parameters, fragments, tracking tags, and trailing slash.
+ * Normalizes an original product URL by removing query parameters, fragments,
+ * the affiliate ID suffix and trailing slash.
  */
 export function normalizeProductUrl(url: string): string {
   if (!url) return '';
   try {
     const parsed = new URL(url, 'https://www.lojadomecanico.com.br');
     let clean = `${parsed.protocol}//${parsed.host}${parsed.pathname}`;
-    clean = clean.replace(/\/20889\/?$/g, '');
+    const affiliateSuffix = new RegExp(`/${escapeRegExp(AFFILIATE_ID)}/?$`, 'i');
+    clean = clean.replace(affiliateSuffix, '');
     clean = clean.replace(/\/+$/, '');
     return clean;
   } catch {
     let clean = url.split('?')[0].split('#')[0];
-    clean = clean.replace(/\/20889\/?$/g, '');
+    const affiliateSuffix = new RegExp(`/${escapeRegExp(AFFILIATE_ID)}/?$`, 'i');
+    clean = clean.replace(affiliateSuffix, '');
     clean = clean.replace(/\/+$/, '');
     return clean;
   }
@@ -35,15 +46,25 @@ export function extractLdmProductId(url: string): string | null {
 }
 
 /**
- * Builds the real affiliate URL without duplicating /20889.
+ * Builds the canonical affiliate URL used by the Facebook publisher.
+ *
+ * This function is intentionally idempotent: calling it with an already
+ * affiliated URL produces exactly the same URL.
  */
 export function buildAffiliateUrl(url: string): string {
-  if (!url) return '';
-  let clean = url.split('?')[0].split('#')[0].trim();
-  clean = clean.replace(/\/+$/, '');
+  const normalized = normalizeProductUrl(url);
+  if (!normalized) return '';
 
-  if (clean.endsWith(`/${AFFILIATE_ID}`)) return clean;
-  return `${clean}/${AFFILIATE_ID}`;
+  const parsed = new URL(normalized);
+  parsed.search = '';
+  parsed.hash = '';
+  parsed.pathname = `${parsed.pathname.replace(/\/+$/, '')}/${AFFILIATE_ID}`;
+  parsed.searchParams.set('afiliado', AFFILIATE_GLOBAL_CODE);
+  return parsed.toString();
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 /**
