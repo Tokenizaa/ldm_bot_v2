@@ -1,25 +1,21 @@
-import { chromium, type BrowserContext, type Page } from 'playwright';
+import { chromium, type BrowserContext, type Page, type Locator } from 'playwright';
 import fs from 'node:fs';
 import path from 'node:path';
 
 const GROUP_SCHEDULED_URL = 'https://www.facebook.com/groups/tokeniza/scheduled_posts';
 const PROFILE_DIR = path.resolve(process.cwd(), 'data', 'browser-profiles', 'facebook');
 
-const WAIT_AFTER_DELETE_MS = 250;
+const WAIT_AFTER_DELETE_MS = 350;
+const MENU_SETTLE_MS = 150;
 const ACTION_TIMEOUT_MS = 5_000;
+const MAX_ATTEMPTS_PER_POST = 3;
 
 function log(message: string): void {
   console.log(`[facebook-cleanup] ${message}`);
 }
 
-async function getActionButtons(page: Page) {
-  return page.locator('[role="button"]').filter({
-    has: undefined,
-  });
-}
-
-async function findFirstPostAction(page: Page) {
-  const buttons = await getActionButtons(page);
+async function findFirstPostAction(page: Page): Promise<Locator | null> {
+  const buttons = page.locator('[role="button"]');
   const count = await buttons.count();
 
   for (let i = 0; i < count; i++) {
@@ -33,32 +29,60 @@ async function findFirstPostAction(page: Page) {
   return null;
 }
 
-async function deleteOnePost(page: Page): Promise<boolean> {
-  const actionButton = await findFirstPostAction(page);
-  if (!actionButton) return false;
-
-  await actionButton.click({ timeout: ACTION_TIMEOUT_MS });
-
+async function clickDeletePost(page: Page): Promise<void> {
   const deleteItem = page
     .locator('[role="menuitem"]')
     .filter({ hasText: /^Excluir post$/ })
     .last();
 
   await deleteItem.waitFor({ state: 'visible', timeout: ACTION_TIMEOUT_MS });
-  await deleteItem.click({ timeout: ACTION_TIMEOUT_MS });
+  await page.waitForTimeout(MENU_SETTLE_MS);
 
+  // Facebook may replace the menu node during its animation. Playwright's
+  // locator is intentionally reacquired on each retry instead of retaining a
+  // stale ElementHandle.
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS_PER_POST; attempt++) {
+    try {
+      await deleteItem.click({ timeout: ACTION_TIMEOUT_MS });
+      return;
+    } catch (error) {
+      if (attempt === MAX_ATTEMPTS_PER_POST) throw error;
+      await page.waitForTimeout(100);
+    }
+  }
+}
+
+async function confirmDelete(page: Page): Promise<void> {
   const dialog = page.locator('[role="dialog"]:visible').last();
-  const confirmButton = dialog
-    .getByRole('button', { name: /^Excluir$/ })
-    .last();
+  const confirmButton = dialog.getByRole('button', { name: /^Excluir$/ }).last();
 
   await confirmButton.waitFor({ state: 'visible', timeout: ACTION_TIMEOUT_MS });
   await confirmButton.click({ timeout: ACTION_TIMEOUT_MS });
+}
 
-  // Facebook removes the card asynchronously. Keep this short; the next
-  // iteration locates the next action button from the current DOM.
-  await page.waitForTimeout(WAIT_AFTER_DELETE_MS);
-  return true;
+async function deleteOnePost(page: Page): Promise<boolean> {
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS_PER_POST; attempt++) {
+    const actionButton = await findFirstPostAction(page);
+    if (!actionButton) return false;
+
+    try {
+      await actionButton.click({ timeout: ACTION_TIMEOUT_MS });
+      await clickDeletePost(page);
+      await confirmDelete(page);
+      await page.waitForTimeout(WAIT_AFTER_DELETE_MS);
+      return true;
+    } catch (error) {
+      // A Facebook menu can be detached while React/FB re-renders it. Close
+      // any transient menu/dialog and retry the same post from fresh locators.
+      if (attempt === MAX_ATTEMPTS_PER_POST) throw error;
+
+      await page.keyboard.press('Escape').catch(() => undefined);
+      await page.waitForTimeout(150);
+      log(`interface atualizada durante exclusão; tentando novamente (${attempt + 1}/${MAX_ATTEMPTS_PER_POST})`);
+    }
+  }
+
+  return false;
 }
 
 async function waitForScheduledPage(page: Page): Promise<void> {
@@ -100,8 +124,6 @@ async function main(): Promise<void> {
     const pages = context.pages().filter(page => !page.isClosed());
     const page = pages[0] ?? await context.newPage();
 
-    // This cleanup script owns its browser context. Close extra tabs only in
-    // this context so it cannot interfere with the scheduler service process.
     for (const extra of context.pages()) {
       if (extra !== page && !extra.isClosed()) {
         await extra.close().catch(() => undefined);
@@ -121,9 +143,7 @@ async function main(): Promise<void> {
       log(`excluído: ${deleted}`);
     }
 
-    // Final state check: there must be no action buttons left.
     const remaining = await findFirstPostAction(page);
-
     if (remaining) {
       throw new Error('Ainda existe pelo menos um post agendado após a limpeza.');
     }
