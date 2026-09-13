@@ -161,18 +161,6 @@ export class SchedulerService {
     }
   }
 
-  private facebookTextContainsProduct(body: string, productName: string): boolean {
-    const normalize = (value: string) => value.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '');
-    const bodyNorm = normalize(body);
-    const nameNorm = normalize(productName);
-    if (nameNorm.length < 12) return false;
-    if (bodyNorm.includes(nameNorm)) return true;
-    const prefix = nameNorm.slice(0, Math.min(52, nameNorm.length));
-    const tailMatch = nameNorm.match(/[a-z0-9]{4,}$/);
-    const tail = tailMatch?.[0] || '';
-    return prefix.length >= 32 && bodyNorm.includes(prefix) && (!tail || bodyNorm.includes(tail));
-  }
-
   async ensureMonthlySchedule(targetDateStr?: string): Promise<{ scheduled: Publication[]; quota: OperationalQuota; message: string }> {
     return this.withSchedulerLock('batch-today', async () => {
       const settings = await storage.getSettings();
@@ -233,28 +221,20 @@ export class SchedulerService {
         existingByKey.set(key, publication);
       }
 
-      // Facebook Planner é consultado antes de montar a fila para bloquear produtos já publicados/agendados,
-      // inclusive registros criados antes da persistência no Supabase.
-      let plannerBody = '';
-      try {
-        plannerBody = await facebookAutomation.getFacebookExistingProductText(normalizeGroupUrl(settings.facebook_group_url));
-        logger.scheduler('FACEBOOK_EXISTING_SCAN status=ok chars=' + plannerBody.length);
-      } catch (err: any) {
-        logger.scheduler('PLANNER_INITIAL_SCAN status=failed error=' + (err?.message || err), 'warn');
-      }
-      const plannerNormalized = plannerBody.replace(/\s+/g, ' ').toLowerCase();
+      // A chave de identidade do produto é a única regra de deduplicação.
+      // O histórico persiste o produto assim que o Facebook confirma o agendamento.
+      const publishedIdentityKeys = await storage.getPublishedProductIdentityKeys(normalizeGroupUrl(settings.facebook_group_url));
       const products = await storage.getProducts(true);
       const candidates = products.filter(p => {
         if (usedProducts.has(p.id)) return false;
-        if (p.current_price <= 0 || !p.product_name) return false;
-        if (!/^https?:\/\//i.test(p.original_url) || !/^https?:\/\//i.test(p.affiliate_url)) return false;
-        if (!p.affiliate_url.includes('/20889')) return false;
-        const productName = p.product_name.replace(/\s+/g, ' ').trim().toLowerCase();
-        if (this.facebookTextContainsProduct(plannerBody, p.product_name)) {
-          logger.scheduler('PLANNER_PRODUCT_BLOCKED product=' + p.id + ' name="' + p.product_name + '" motivo=ja_existe_no_facebook');
+        if (publishedIdentityKeys.has(p.product_identity_key)) {
+          logger.scheduler('PRODUCT_ALREADY_USED_BLOCKED product=' + p.id + ' identity=' + p.product_identity_key);
           usedProducts.add(p.id);
           return false;
         }
+        if (p.current_price <= 0 || !p.product_name) return false;
+        if (!/^https?:\/\//i.test(p.original_url) || !/^https?:\/\//i.test(p.affiliate_url)) return false;
+        if (!p.affiliate_url.includes('/20889')) return false;
         return true;
       });
 
@@ -288,6 +268,11 @@ export class SchedulerService {
           }
           const product = candidates[candidateIndex++];
           if (!product) break outer;
+          if (publishedIdentityKeys.has(product.product_identity_key)) {
+            logger.scheduler('PRODUCT_ALREADY_USED_GUARD product=' + product.id + ' identity=' + product.product_identity_key);
+            usedProducts.add(product.id);
+            continue;
+          }
 
           const key = calculatePublicationIdempotencyKey(product.id, settings.facebook_group_url, slotIso);
           let publication = existingByKey.get(key);
@@ -326,19 +311,6 @@ export class SchedulerService {
                   logger.scheduler('PLANNER_RECONCILIATION_PERIODIC trigger=5_confirmed');
                   const plannerAll = await storage.getPublications();
                   await this.reconcileNearTermScheduledPublications(plannerAll, settings, Date.now());
-                  try {
-                    const plannerText = (await facebookAutomation.getScheduledPlannerText(normalizeGroupUrl(settings.facebook_group_url))).replace(/\s+/g, ' ').toLowerCase();
-                    for (const candidate of candidates) {
-                      const name = candidate.product_name.replace(/\s+/g, ' ').trim().toLowerCase();
-                      if (this.facebookTextContainsProduct(plannerText, candidate.product_name)) {
-                        usedProducts.add(candidate.id);
-                        logger.scheduler('PLANNER_PRODUCT_BLOCKED_PERIODIC product=' + candidate.id + ' name="' + candidate.product_name + '"');
-                      }
-                    }
-                    logger.scheduler('PLANNER_PERIODIC_SCAN status=ok chars=' + plannerText.length);
-                  } catch (err: any) {
-                    logger.scheduler('PLANNER_PERIODIC_SCAN status=failed error=' + (err?.message || err), 'warn');
-                  }
                   scheduledSincePlannerReconciliation = 0;
                 }
               } else if (STRUCTURAL_FACEBOOK_ERRORS.has(result.error_message || '')) {
