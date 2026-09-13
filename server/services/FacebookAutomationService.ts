@@ -25,8 +25,17 @@ export interface FacebookScheduleResult {
   error?: string;
 }
 
+interface PlannerCheckResult {
+  found: boolean;
+  plannerUrl: string;
+  snippet?: string;
+  verified: boolean;
+}
+
 class FacebookAutomationService {
   private chain: Promise<void> = Promise.resolve();
+  private schedulesSincePlannerVerification = 0;
+  private readonly plannerVerificationInterval = 5;
   private readonly tokenActivationTimeoutMs = 5000;
   private readonly tokenStabilityPollMs = 75;
   private readonly tokenStabilityWindowMs = 250;
@@ -101,8 +110,6 @@ class FacebookAutomationService {
   }
 
   private async cleanupFailedSchedule(page: Page) {
-    // A failed native Facebook step can leave the composer/dialog covering the group.
-    // Close only the visible dialogs; successful scheduling closes the composer itself.
     for (let i = 0; i < 3; i++) {
       const visibleDialogs = await page.locator("div[role='dialog']:visible").count().catch(() => 0);
       if (!visibleDialogs) return;
@@ -250,9 +257,7 @@ class FacebookAutomationService {
     const day = String(target.getDate());
     const monthLong = target.toLocaleDateString('pt-BR', { month: 'long' });
     const year = String(target.getFullYear());
-    // Facebook exposes the complete date through the gridcell accessible name.
-    // Use a real RegExp whitespace escape; do not double-escape it.
-    const datePattern = new RegExp(`(?:domingo|segunda-feira|terça-feira|quarta-feira|quinta-feira|sexta-feira|sábado),?\s*${day} de ${monthLong} de ${year}`, 'i');
+    const datePattern = new RegExp(`${day} de ${monthLong} de ${year}`, 'i');
     const cell = page.getByRole('gridcell', { name: datePattern }).first();
     await cell.waitFor({ state: 'visible', timeout: this.calendarTimeoutMs });
     await cell.click({ timeout: this.interactionTimeoutMs });
@@ -267,12 +272,49 @@ class FacebookAutomationService {
     this.log(execId, 'TIME_READY', `time=${time}`);
   }
 
-  private async confirmSchedule(execId: string, page: Page) {
+  private async checkPostInPlanner(page: Page, groupUrl: string, content: string, _date: string, _time: string, productName?: string): Promise<PlannerCheckResult> {
+    const plannerUrl = groupUrl.replace(/\/+$/, '') + '/scheduled_posts';
+    try {
+      await page.goto(plannerUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
+      const hasBody = await page.waitForFunction(() => !!(document.body.innerText || '').trim(), null, { timeout: 10000 }).then(() => true).catch(() => false);
+      if (!hasBody) return { found: false, plannerUrl, verified: false };
+      const body = (await page.locator('body').innerText().catch(() => '')).replace(/\s+/g, ' ').trim();
+      if (body.length < 20) return { found: false, plannerUrl, verified: false };
+      const needle = content.replace(/\s+/g, ' ').trim().slice(0, 80);
+      const name = productName?.trim().slice(0, 40) || '';
+      if ((needle.length > 20 && body.includes(needle)) || (name.length > 10 && body.includes(name))) {
+        return { found: true, plannerUrl, verified: true, snippet: needle };
+      }
+      return { found: false, plannerUrl, verified: true };
+    } catch {
+      return { found: false, plannerUrl, verified: false };
+    }
+  }
+
+  private async confirmAndVerify(execId: string, page: Page, groupUrl: string, content: string, date: string, time: string, productName?: string): Promise<FacebookScheduleResult> {
     const button = page.locator("[aria-label='Programar']:visible").last();
     await button.waitFor({ state: 'visible', timeout: 12000 });
+    if (await button.isDisabled().catch(() => false) || await button.getAttribute('aria-disabled') === 'true') {
+      throw new Error('FACEBOOK_SCHEDULE_CONFIRM_DISABLED');
+    }
     await button.click({ timeout: this.interactionTimeoutMs });
-    await page.locator("div[role='dialog'][aria-label='Criar post']:visible").waitFor({ state: 'hidden', timeout: 15000 }).catch(() => undefined);
-    this.log(execId, 'SCHEDULE_CONFIRMED', 'Programar confirmado pelo fluxo canônico', 'success');
+    const plannerUrl = groupUrl.replace(/\/+$/, '') + '/scheduled_posts';
+    const shouldVerify = ++this.schedulesSincePlannerVerification >= this.plannerVerificationInterval;
+    if (!shouldVerify) return { success: true, plannerUrl, submitted: true };
+    this.schedulesSincePlannerVerification = 0;
+    const check = await this.checkPostInPlanner(page, groupUrl, content, date, time, productName);
+    if (!check.verified) return { success: false, submitted: true, uncertain: true, plannerUrl, error: 'FACEBOOK_PLANNER_UNVERIFIED' };
+    if (check.found) return { success: true, plannerUrl, submitted: true };
+    const recheck = await this.checkPostInPlanner(page, groupUrl, content, date, time, productName);
+    if (recheck.verified && recheck.found) return { success: true, plannerUrl, submitted: true };
+    if (!recheck.verified) return { success: false, submitted: true, uncertain: true, plannerUrl, error: 'FACEBOOK_PLANNER_UNVERIFIED' };
+    return { success: false, submitted: true, uncertain: true, plannerUrl, error: 'FACEBOOK_PLANNER_POST_NOT_FOUND' };
+  }
+
+  async checkScheduledPost(groupUrl: string, content: string, date: string, time: string, productName?: string) {
+    const page = await facebookBrowser.getOperationalPage();
+    await facebookSession.requireAuthenticated();
+    return this.checkPostInPlanner(page, groupUrl, content, date, time, productName);
   }
 
   async schedule(input: FacebookScheduleInput): Promise<FacebookScheduleResult> {
@@ -287,8 +329,7 @@ class FacebookAutomationService {
         await this.openScheduleDirect(execId, page);
         await this.setDate(execId, page, input.scheduledDate);
         await this.setTime(execId, page, input.scheduledTime);
-        await this.confirmSchedule(execId, page);
-        return { success: true, scheduledAt: `${input.scheduledDate}T${input.scheduledTime}`, submitted: true };
+        return await this.confirmAndVerify(execId, page, input.groupUrl, input.content, input.scheduledDate, input.scheduledTime, input.productName);
       } catch (error: any) {
         await this.cleanupFailedSchedule(page).catch(() => undefined);
         return { success: false, error: error?.message || String(error) };
