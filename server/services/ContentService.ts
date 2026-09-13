@@ -14,7 +14,7 @@ export class ContentService {
   async generateCopyForProduct(product: Product, customModel?: string): Promise<GeneratedProductCopy> {
     const affiliateUrl = buildAffiliateUrl(product.affiliate_url || product.original_url);
 
-    if (!affiliateUrl.endsWith('/20889')) {
+    if (!affiliateUrl.includes('/20889?afiliado=')) {
       const error = `URL de afiliado inválida: ${affiliateUrl}`;
       logger.ai(error, 'error');
       throw new Error(error);
@@ -39,7 +39,7 @@ export class ContentService {
    */
   async ensureCopyForPublication(product: Product, existingCopy?: string, customModel?: string): Promise<GeneratedProductCopy> {
     const affiliateUrl = buildAffiliateUrl(product.affiliate_url || product.original_url);
-    if (!affiliateUrl.endsWith('/20889')) {
+    if (!affiliateUrl.includes('/20889?afiliado=')) {
       throw new Error('URL de afiliado inválida: ' + affiliateUrl);
     }
     const content = await this.copyAgent.ensurePublicationCopy(product, existingCopy, customModel);
