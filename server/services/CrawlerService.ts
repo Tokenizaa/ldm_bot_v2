@@ -36,7 +36,7 @@ export class CrawlerService {
       return parsed.protocol === 'https:' &&
         parsed.hostname === LDM_HOST &&
         /^\/produto\/\d+(?:\/|$)/i.test(parsed.pathname) &&
-        !["'<>]|&quot;|&amp;|\\/i.test(parsed.pathname);
+        !/["'<>]|&quot;|&amp;|\\/i.test(parsed.pathname);
     } catch {
       return false;
     }
