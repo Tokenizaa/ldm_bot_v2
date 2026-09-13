@@ -56,11 +56,8 @@ export function buildAffiliateUrl(url: string): string {
   if (!normalized) return '';
 
   const parsed = new URL(normalized);
-  parsed.search = '';
-  parsed.hash = '';
-  parsed.pathname = `${parsed.pathname.replace(/\/+$/, '')}/${AFFILIATE_ID}`;
-  parsed.searchParams.set('afiliado', AFFILIATE_GLOBAL_CODE);
-  return parsed.toString();
+  const pathname = `${parsed.pathname.replace(/\/+$/, '')}/${AFFILIATE_ID}`;
+  return `${parsed.origin}${pathname}?afiliado=${AFFILIATE_GLOBAL_CODE}`;
 }
 
 function escapeRegExp(value: string): string {
