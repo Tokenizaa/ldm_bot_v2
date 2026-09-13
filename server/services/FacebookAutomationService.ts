@@ -64,7 +64,7 @@ class FacebookAutomationService {
   }
 
   private editor(page: Page): Locator {
-    return page.locator("div[role='dialog'][aria-label='Criar post']:visible [role='textbox']:visible").first();
+    return page.locator('[role="dialog"] [data-lexical-editor="true"][contenteditable="true"]:not([aria-label*="Comente" i]),[role="dialog"] [contenteditable="true"][role="textbox"]:not([aria-label*="Comente" i]),div[role="dialog"] [role="textbox"]').first();
   }
 
   private scheduleDialog(page: Page): Locator {
@@ -318,7 +318,7 @@ class FacebookAutomationService {
     const recheck = await this.checkPostInPlanner(page, groupUrl, content, date, time, productName);
     if (recheck.verified && recheck.found) return { success: true, plannerUrl, submitted: true };
     if (!recheck.verified) return { success: false, submitted: true, uncertain: true, plannerUrl, error: 'FACEBOOK_PLANNER_UNVERIFIED' };
-    return { success: false, submitted: true, uncertain: true, plannerUrl, error: 'FACEBOOK_PLANNER_POST_NOT_FOUND' };
+    return { success: false, submitted: true, uncertain: true, plannerUrl, error: 'FACEBOOK_POST_NOT_FOUND' };
   }
 
   async verifyGroup(groupUrl: string) {
