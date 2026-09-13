@@ -196,8 +196,7 @@ export class SchedulerService {
         (p.published_at || p.scheduled_at)
       );
       const activeProducts = refreshedAll.filter(p =>
-        (ACTIVE_PRODUCT_STATUSES as readonly string[]).includes(p.status) &&
-        new Date(p.scheduled_at).getTime() > now.getTime()
+        (ACTIVE_PRODUCT_STATUSES as readonly string[]).includes(p.status)
       );
       const reservedMonth = confirmed.filter(p => {
         const ref = p.published_at || p.scheduled_at || '';
