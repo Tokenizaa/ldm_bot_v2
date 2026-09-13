@@ -26,13 +26,12 @@
     "playwright": "^1.63.0",
     "react": "^19.0.1",
     "react-dom": "^19.0.1",
-    "vite": "^6.2.3",
-    "esbuild": "^0.25.0"
+    "vite": "^6.2.3"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",
     "autoprefixer": "^10.4.21",
-    "tailwindcss": "^4.1.21",
+    "tailwindcss": "^10.4.21",
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",
     "vite": "^6.2.3",
