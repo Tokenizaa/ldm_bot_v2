@@ -11,15 +11,16 @@ export class FacebookSessionService {
   private async withLock<T>(operation:()=>Promise<T>):Promise<T>{const previous=this.sessionLock;let release!:()=>void;this.sessionLock=new Promise<void>(resolve=>{release=resolve;});await previous;try{return await operation();}finally{release();}}
   getStatus():FacebookSessionStatus{return{...this.status};}
   private async isLoginPage():Promise<boolean>{try{const page=await facebookBrowser.getOperationalPage();const currentUrl=page.url();if(/\/login|\/checkpoint|\/recover/i.test(currentUrl))return true;return await page.locator('input[name="email"], input[name="pass"], form[action*="login"]').count().catch(()=>0)>0;}catch{return false;}}
-  private isGroupUrlMatch(currentUrl:string,targetGroupUrl:string):boolean{try{const currentObj=new URL(currentUrl),targetObj=new URL(targetGroupUrl);return currentObj.origin===targetObj.origin&&currentObj.pathname.replace(/\/+$/,'')===targetObj.pathname.replace(/\/+$/,'');}catch{return false;}}
 
   private async waitForGroupOperational(page:any,targetUrl:string):Promise<boolean>{
     const expected=new URL(targetUrl),pathname=expected.pathname.replace(/\/+$/,'');
     return page.waitForFunction(({origin,pathname})=>{
       if(window.location.origin!==origin||window.location.pathname.replace(/\/+$/,'')!==pathname)return false;
-      const body=(document.body?.innerText||'').slice(0,2000);
-      return !!document.querySelector('main,[role="main"],[role="feed"],[aria-label="Escreva algo..."],[aria-label="No que você está pensando?"]') || /Facebook/i.test(document.title) || body.length>100;
-    },{origin:expected.origin,pathname},{timeout:20000,polling:100});
+      return Boolean(document.querySelector('[aria-label="Escreva algo..."]'))
+        || Boolean(document.querySelector('[aria-label="No que você está pensando?"]'))
+        || Boolean(document.querySelector('[aria-label="Criar publicação"]'))
+        || Boolean(document.querySelector('main,[role="main"],[role="feed"]'));
+    },{origin:expected.origin,pathname},{timeout:30000,polling:100});
   }
 
   async start(timeoutMs=0):Promise<FacebookSessionStatus>{return this.withLock(async()=>{try{
@@ -40,8 +41,8 @@ export class FacebookSessionService {
       if(!this.isGroupUrlMatch(page.url(),targetUrl)){
         logger.facebook(`[Startup] Navegando página operacional única para o grupo: ${targetUrl}`);
         await page.goto(targetUrl,{waitUntil:'commit',timeout:60000});
-        await this.waitForGroupOperational(page,targetUrl);
       }
+      await this.waitForGroupOperational(page,targetUrl);
       const afterNavUrl=page.url();
       if(/\/login|\/checkpoint|\/recover/i.test(afterNavUrl)){this.status={...this.status,connected:false,status:'requires_reauth',configured_group_url:targetUrl,group_accessible:false,details:`Redirecionado para tela de autenticação/checkpoint (${afterNavUrl}).`};logger.facebook(`[Startup] Redirecionamento para checkpoint detectado: ${afterNavUrl}`,'warn');return this.getStatus();}
       let groupAccessible=false,details=`Sessão ativa e confirmada no grupo alvo: ${targetUrl}`;
