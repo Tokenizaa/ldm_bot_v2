@@ -34,8 +34,6 @@ export class SchedulerService {
   private lastScheduleOperationAt = 0;
   private readonly minScheduleGapMs = 10000;
   private readonly maxScheduleGapMs = 22000;
-  private lastPlannerReconciliationAt = 0;
-  private readonly plannerReconciliationTtlMs = 10 * 60 * 1000;
   private readonly plannerReconciliationHorizonMs = 48 * 60 * 60 * 1000;
   private readonly plannerReconciliationMaxItems = 10;
   private readonly staleAttemptingThresholdMs = 20 * 60 * 1000;
@@ -110,11 +108,6 @@ export class SchedulerService {
     settings: Awaited<ReturnType<typeof storage.getSettings>>,
     nowMs: number
   ): Promise<void> {
-    if (nowMs - this.lastPlannerReconciliationAt < this.plannerReconciliationTtlMs) {
-      logger.scheduler('PLANNER_RECONCILIATION_DEFERRED verificação periódica ainda dentro do TTL');
-      return;
-    }
-
     const candidates = all
       .filter(p => p.status === 'scheduled' && new Date(p.scheduled_at).getTime() > nowMs)
       .filter(p => new Date(p.scheduled_at).getTime() <= nowMs + this.plannerReconciliationHorizonMs)
@@ -122,12 +115,10 @@ export class SchedulerService {
       .slice(0, this.plannerReconciliationMaxItems);
 
     if (!candidates.length) {
-      this.lastPlannerReconciliationAt = nowMs;
       logger.scheduler('PLANNER_RECONCILIATION_SKIP nenhum agendamento próximo para verificar');
       return;
     }
 
-    this.lastPlannerReconciliationAt = nowMs;
     logger.scheduler(`PLANNER_RECONCILIATION_START count=${candidates.length}`);
     const groupUrl = normalizeGroupUrl(settings.facebook_group_url);
 
@@ -249,6 +240,7 @@ export class SchedulerService {
       }
 
       const scheduled: Publication[] = [];
+      let scheduledSincePlannerReconciliation = 0;
       let candidateIndex = 0;
       let structuralFailure: string | null = null;
 
@@ -301,6 +293,14 @@ export class SchedulerService {
               if (result.status === 'scheduled') {
                 usedProducts.add(product.id);
                 usedSlots.add(normalizeScheduledAt(result.scheduled_at));
+                scheduledSincePlannerReconciliation += 1;
+
+                if (scheduledSincePlannerReconciliation >= 5) {
+                  logger.scheduler('PLANNER_RECONCILIATION_PERIODIC trigger=5_confirmed');
+                  const plannerAll = await storage.getPublications();
+                  await this.reconcileNearTermScheduledPublications(plannerAll, settings, Date.now());
+                  scheduledSincePlannerReconciliation = 0;
+                }
               } else if (STRUCTURAL_FACEBOOK_ERRORS.has(result.error_message || '')) {
                 structuralFailure = result.error_message || 'FACEBOOK_STRUCTURAL_FAILURE';
                 break outer;
