@@ -198,18 +198,48 @@ export class StorageService {
   }
 
   async getPublishedProductIdentityKeys(groupUrl?: string): Promise<Set<string>> {
-    const { data, error } = await this.supabase
-      .from('publication_history')
-      .select('product_identity_key,group_id,status')
-      .in('status', ['scheduled', 'published']);
-    if (error) throw new Error(`Falha ao consultar identidade dos produtos publicados: ${error.message}`);
+    // Durable source of truth: a product that has a scheduled/published post
+    // in this group is permanently consumed for this publication workflow.
     const normalizedGroup = groupUrl ? normalizeGroupUrl(groupUrl) : undefined;
-    const keys = new Set<string>();
-    for (const row of data || []) {
-      if (normalizedGroup && row.group_id && normalizeGroupUrl(String(row.group_id)) !== normalizedGroup) continue;
-      if (row.product_identity_key) keys.add(String(row.product_identity_key));
-    }
-    return keys;
+    let query = this.supabase
+      .from('posts')
+      .select('affiliate_link_id,group_id,status')
+      .in('status', ['scheduled', 'published']);
+    if (normalizedGroup) query = query.eq('group_id', normalizedGroup);
+
+    const { data, error } = await query;
+    if (error) throw new Error(`Falha ao consultar produtos já publicados/agendados: ${error.message}`);
+
+    const ids = new Set<string>(
+      (data || []).map((row: any) => String(row.affiliate_link_id || '')).filter(Boolean)
+    );
+    if (!ids.size) return new Set<string>();
+
+    const { data: products, error: productError } = await this.supabase
+      .from('affiliate_links')
+      .select('id,product_identity_key')
+      .in('id', Array.from(ids));
+    if (productError) throw new Error(`Falha ao consultar chaves dos produtos já utilizados: ${productError.message}`);
+
+    return new Set<string>(
+      (products || [])
+        .map((row: any) => String(row.product_identity_key || ''))
+        .filter(Boolean)
+    );
+  }
+
+  async getPublishedProductIds(groupUrl?: string): Promise<Set<string>> {
+    const normalizedGroup = groupUrl ? normalizeGroupUrl(groupUrl) : undefined;
+    let query = this.supabase
+      .from('posts')
+      .select('affiliate_link_id,group_id,status')
+      .in('status', ['scheduled', 'published']);
+    if (normalizedGroup) query = query.eq('group_id', normalizedGroup);
+    const { data, error } = await query;
+    if (error) throw new Error(`Falha ao consultar produtos já utilizados: ${error.message}`);
+    return new Set<string>(
+      (data || []).map((row: any) => String(row.affiliate_link_id || '')).filter(Boolean)
+    );
   }
 
   async getPublications(status?: PublicationStatus): Promise<Publication[]> {
