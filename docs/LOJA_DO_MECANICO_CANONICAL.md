@@ -81,32 +81,42 @@ A página individual deve ser tratada com três conceitos separados:
 
 O crawler não deve substituir a URL original por uma URL de afiliado.
 
-## 7. Afiliado `/20889`
+## 7. URL de afiliado para publicação no Facebook
 
-A regra do sistema é gerar a URL de afiliado a partir da URL original normalizada:
+A URL final de publicação usa os dois identificadores fornecidos pelo programa de afiliados:
 
-`<original_url>/20889`
+- `AFFILIATE_ID=20889`;
+- `AFFILIATE_GLOBAL_CODE=0S7w4Sy5S12oCKmeTo3Z3g==`.
 
-Nunca:
+Formato canônico:
+
+`<original_url>/20889?afiliado=0S7w4Sy5S12oCKmeTo3Z3g==`
+
+Exemplo real validado:
+
+`https://www.lojadomecanico.com.br/produto/183851/21/223/parafusadeira-furadeira-de-impacto-brushless-12-pol-20v-com-2-baterias-carregador-e-maleta-dewalt-dcd7781d2-br/20889?afiliado=0S7w4Sy5S12oCKmeTo3Z3g==`
+
+A investigação comparou essa forma com a URL oficial contendo `utm_campaign`, `utm_source` e `utm_medium`. A forma `?afiliado=` foi escolhida para a publicação no Facebook porque foi a forma observada funcionando no card/preview do Facebook, enquanto a URL oficial com UTMs apresentou falha de card no teste manual.
+
+O builder centralizado é `server/utils/affiliate.ts` e é idempotente. Ele aceita URL original, URL com `/20889` ou URL com UTMs e sempre produz uma única URL canônica.
+
+Nunca produzir:
 
 - `/20889/20889`;
-- query string de rastreamento;
+- `?utm_campaign=...` na URL final publicada;
+- `?utm_source=...` na URL final publicada;
+- `?utm_medium=...` na URL final publicada;
 - fragmento;
-- HTML entity no pathname;
-- JSON anexado ao slug.
+- parâmetros `afiliado` duplicados.
 
-Exemplo de produto real usado na validação:
-
-`https://www.lojadomecanico.com.br/produto/621944/98/1045/maquina-de-solda-inversora-multiprocesso-mig-0-sem-gas-120a-bivolt-com-mascara-de-solda-optiarc-70-boxer-99086/20889`
-
-A URL acima representa a forma afiliada; a `original_url` correspondente deve remover somente o `/20889` final.
+A atribuição de uma comissão por compra real não está comprovada por transação; o comportamento validado é o tracking/URL e o preview do Facebook.
 
 ## 8. Regras de produção
 
 - Meta por execução: **150 produtos reais por lote**.
 - Não é limite vitalício de produtos.
 - Produtos devem ser persistidos no Supabase somente após validação.
-- Não publicar no Facebook nesta etapa.
+- Não publicar no Facebook nesta etapa do crawler.
 - Não usar dados mock/fictícios.
 - Não usar MCP Playwright como scraper de produção.
 - Não usar `/categoria/*` como fonte atual.
@@ -120,5 +130,17 @@ Uma execução `npm run scrape:150` somente é considerada concluída quando:
 2. páginas individuais retornaram dados válidos;
 3. 150 produtos únicos foram validados;
 4. `original_url` e `affiliate_url` foram separados corretamente;
-5. 150 registros foram persistidos/atualizados no Supabase;
-6. nenhum dado mock foi utilizado.
+5. `affiliate_url` corresponde exatamente ao builder canônico;
+6. a URL final não contém UTMs;
+7. 150 registros foram persistidos/atualizados no Supabase;
+8. nenhum dado mock foi utilizado.
+
+## 10. Teste unitário
+
+Executar:
+
+```bash
+npm run test:affiliate
+```
+
+Esse teste cobre URL limpa, URL já afiliada, URL oficial com UTM, idempotência, ausência de UTMs e ausência de duplicação do affiliate ID.
