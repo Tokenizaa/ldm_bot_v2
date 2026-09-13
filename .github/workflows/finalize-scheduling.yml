@@ -1,0 +1,135 @@
+name: Finalize scheduling optimization
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/finalize-scheduling.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Apply surgical scheduling optimizations
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          fb = Path('server/services/FacebookAutomationService.ts')
+          s = fb.read_text()
+          s = s.replace('  private readonly tokenActivationSettleMs = 600;\n', '')
+
+          old = '''  private async activateHashtagToken(execId: string, page: Page, token: string): Promise<void> {
+    this.log(execId, 'TOKEN_TYPE_COMPLETE', `token=${token}`);
+    this.log(execId, 'HASHTAG_SETTLE', `aguardando Facebook processar ${token} por ${this.tokenActivationSettleMs}ms`);
+    await page.waitForTimeout(this.tokenActivationSettleMs);
+    this.log(execId, 'HASHTAG_ENTER', `confirmando ${token}`);
+    await page.keyboard.press('Enter').catch(() => undefined);
+    await page.waitForTimeout(300);
+    this.log(execId, 'HASHTAG_ACTIVATION_CONFIRMED', `token=${token}`);
+  }'''
+          new = '''  private async activateHashtagToken(execId: string, page: Page, token: string): Promise<void> {
+    this.log(execId, 'TOKEN_TYPE_COMPLETE', `token=${token}`);
+
+    // Wait for the editor to expose the typed token instead of sleeping a fixed amount.
+    const editor = this.editor(page);
+    await page.waitForFunction(
+      (value) => {
+        const editor = document.querySelector(
+          'div[role="dialog"] [data-lexical-editor="true"][contenteditable="true"], ' +
+          'div[role="dialog"] [contenteditable="true"][role="textbox"], ' +
+          'div[role="dialog"] [role="textbox"]'
+        );
+        return !!editor && (editor.textContent || '').includes(value);
+      },
+      token,
+      { timeout: this.tokenActivationTimeoutMs }
+    ).catch(() => undefined);
+
+    this.log(execId, 'HASHTAG_ENTER', `confirmando ${token}`);
+    await editor.press('Enter').catch(async () => {
+      await page.keyboard.press('Enter').catch(() => undefined);
+    });
+
+    await page.waitForFunction(
+      () => document.querySelectorAll("[role='option']:visible").length === 0,
+      null,
+      { timeout: this.tokenActivationTimeoutMs }
+    ).catch(() => undefined);
+
+    this.log(execId, 'HASHTAG_ACTIVATION_CONFIRMED', `token=${token}`);
+  }'''
+          if old not in s:
+              raise SystemExit('Expected hashtag implementation not found')
+          s = s.replace(old, new)
+
+          old = "      { timeout: 25000 }\n    ).then(() => true).catch(() => false);"
+          new = "      { timeout: 12000 }\n    ).then(() => true).catch(() => false);"
+          if old not in s:
+              raise SystemExit('Expected OG timeout not found')
+          s = s.replace(old, new, 1)
+          s = s.replace("this.log(execId, 'OG_TIMEOUT', 'preview não confirmou em 25s; seguindo mesmo assim', 'warn');",
+                        "this.log(execId, 'OG_TIMEOUT', 'preview não confirmou em 12s; seguindo mesmo assim', 'warn');")
+          fb.write_text(s)
+
+          sched = Path('server/services/SchedulerService.ts')
+          s = sched.read_text()
+          old = '  private readonly minScheduleGapMs = 15000;\n'
+          new = '''  private readonly minScheduleGapMs = 10000;
+  private readonly maxScheduleGapMs = 22000;
+
+  private nextHumanScheduleGapMs(): number {
+    return this.minScheduleGapMs + Math.floor(Math.random() * (this.maxScheduleGapMs - this.minScheduleGapMs + 1));
+  }
+'''
+          if old not in s:
+              raise SystemExit('Expected scheduler pacing field not found')
+          s = s.replace(old, new)
+
+          old = '''  private async waitForSchedulePacing(): Promise<void> {
+    const elapsed = Date.now() - this.lastScheduleOperationAt;
+    const remaining = this.minScheduleGapMs - elapsed;
+    if (remaining > 0) {
+      logger.scheduler(`SCHEDULE_PACING_WAIT ms=${remaining}`);
+      await new Promise(resolve => setTimeout(resolve, remaining));
+    }
+    this.lastScheduleOperationAt = Date.now();
+  }'''
+          new = '''  private async waitForSchedulePacing(): Promise<void> {
+    const elapsed = Date.now() - this.lastScheduleOperationAt;
+    const targetGap = this.nextHumanScheduleGapMs();
+    const remaining = targetGap - elapsed;
+    if (remaining > 0) {
+      logger.scheduler(`SCHEDULE_PACING_WAIT ms=${remaining} targetGapMs=${targetGap}`);
+      await new Promise(resolve => setTimeout(resolve, remaining));
+    }
+    this.lastScheduleOperationAt = Date.now();
+  }'''
+          if old not in s:
+              raise SystemExit('Expected scheduler pacing method not found')
+          s = s.replace(old, new)
+          sched.write_text(s)
+          PY
+
+      - name: Validate build and tests
+        run: |
+          npm ci
+          npm run build
+          npm test -- --runInBand
+
+      - name: Commit optimized services and remove bootstrap workflow
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add server/services/FacebookAutomationService.ts server/services/SchedulerService.ts
+          git rm .github/workflows/finalize-scheduling.yml
+          git diff --cached --check
+          git commit -m 'perf: finalize Facebook scheduling optimization'
+          git push
