@@ -161,6 +161,18 @@ export class SchedulerService {
     }
   }
 
+  private facebookTextContainsProduct(body: string, productName: string): boolean {
+    const normalize = (value: string) => value.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '');
+    const bodyNorm = normalize(body);
+    const nameNorm = normalize(productName);
+    if (nameNorm.length < 12) return false;
+    if (bodyNorm.includes(nameNorm)) return true;
+    const prefix = nameNorm.slice(0, Math.min(52, nameNorm.length));
+    const tailMatch = nameNorm.match(/[a-z0-9]{4,}$/);
+    const tail = tailMatch?.[0] || '';
+    return prefix.length >= 32 && bodyNorm.includes(prefix) && (!tail || bodyNorm.includes(tail));
+  }
+
   async ensureMonthlySchedule(targetDateStr?: string): Promise<{ scheduled: Publication[]; quota: OperationalQuota; message: string }> {
     return this.withSchedulerLock('batch-today', async () => {
       const settings = await storage.getSettings();
@@ -238,7 +250,7 @@ export class SchedulerService {
         if (!/^https?:\/\//i.test(p.original_url) || !/^https?:\/\//i.test(p.affiliate_url)) return false;
         if (!p.affiliate_url.includes('/20889')) return false;
         const productName = p.product_name.replace(/\s+/g, ' ').trim().toLowerCase();
-        if (productName.length >= 12 && plannerNormalized.includes(productName)) {
+        if (this.facebookTextContainsProduct(plannerBody, p.product_name)) {
           logger.scheduler('PLANNER_PRODUCT_BLOCKED product=' + p.id + ' name="' + p.product_name + '" motivo=ja_existe_no_facebook');
           usedProducts.add(p.id);
           return false;
@@ -318,7 +330,7 @@ export class SchedulerService {
                     const plannerText = (await facebookAutomation.getScheduledPlannerText(normalizeGroupUrl(settings.facebook_group_url))).replace(/\s+/g, ' ').toLowerCase();
                     for (const candidate of candidates) {
                       const name = candidate.product_name.replace(/\s+/g, ' ').trim().toLowerCase();
-                      if (name.length >= 12 && plannerText.includes(name)) {
+                      if (this.facebookTextContainsProduct(plannerText, candidate.product_name)) {
                         usedProducts.add(candidate.id);
                         logger.scheduler('PLANNER_PRODUCT_BLOCKED_PERIODIC product=' + candidate.id + ' name="' + candidate.product_name + '"');
                       }
