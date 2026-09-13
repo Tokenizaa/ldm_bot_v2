@@ -36,7 +36,7 @@ export class CrawlerService {
       return parsed.protocol === 'https:' &&
         parsed.hostname === LDM_HOST &&
         /^\/produto\/\d+(?:\/|$)/i.test(parsed.pathname) &&
-        !/["'<>]|&quot;|&amp;|\\/i.test(parsed.pathname);
+        !["'<>]|&quot;|&amp;|\\/i.test(parsed.pathname);
     } catch {
       return false;
     }
@@ -203,7 +203,7 @@ export class CrawlerService {
 
           const originalUrl = normalizeProductUrl(raw.url);
           const affiliateUrl = buildAffiliateUrl(originalUrl);
-          if (!this.isLdmProductUrl(originalUrl) || !affiliateUrl.endsWith('/20889')) continue;
+          if (!this.isLdmProductUrl(originalUrl) || !affiliateUrl.includes('/20889?afiliado=')) continue;
 
           const productId = extractLdmProductId(originalUrl);
           const existingIdentity = existingIdentityByUrl.get(originalUrl);
