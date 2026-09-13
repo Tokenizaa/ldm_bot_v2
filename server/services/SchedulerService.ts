@@ -221,15 +221,30 @@ export class SchedulerService {
         existingByKey.set(key, publication);
       }
 
+      // Facebook Planner é consultado antes de montar a fila para bloquear produtos já publicados/agendados,
+      // inclusive registros criados antes da persistência no Supabase.
+      let plannerBody = '';
+      try {
+        plannerBody = await facebookAutomation.getScheduledPlannerText(normalizeGroupUrl(settings.facebook_group_url));
+        logger.scheduler('PLANNER_INITIAL_SCAN status=ok chars=' + plannerBody.length);
+      } catch (err: any) {
+        logger.scheduler('PLANNER_INITIAL_SCAN status=failed error=' + (err?.message || err), 'warn');
+      }
+      const plannerNormalized = plannerBody.replace(/\s+/g, ' ').toLowerCase();
       const products = await storage.getProducts(true);
-      const candidates = products.filter(p =>
-        !usedProducts.has(p.id) &&
-        p.current_price > 0 &&
-        Boolean(p.product_name) &&
-        /^https?:\/\//i.test(p.original_url) &&
-        /^https?:\/\//i.test(p.affiliate_url) &&
-        p.affiliate_url.includes('/20889')
-      );
+      const candidates = products.filter(p => {
+        if (usedProducts.has(p.id)) return false;
+        if (p.current_price <= 0 || !p.product_name) return false;
+        if (!/^https?:\/\//i.test(p.original_url) || !/^https?:\/\//i.test(p.affiliate_url)) return false;
+        if (!p.affiliate_url.includes('/20889')) return false;
+        const productName = p.product_name.replace(/\s+/g, ' ').trim().toLowerCase();
+        if (productName.length >= 12 && plannerNormalized.includes(productName)) {
+          logger.scheduler('PLANNER_PRODUCT_BLOCKED product=' + p.id + ' name="' + p.product_name + '" motivo=ja_existe_no_facebook');
+          usedProducts.add(p.id);
+          return false;
+        }
+        return true;
+      });
 
       if (!candidates.length) {
         return {
