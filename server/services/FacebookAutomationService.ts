@@ -357,7 +357,7 @@ class FacebookAutomationService {
           await page.waitForTimeout(250);
           const resulting = await input.inputValue().catch(() => '');
           if (resulting === date || resulting.toLowerCase().includes(monthShort.toLowerCase()) || resulting.includes(day)) {
-            this.log(execId, 'DATE_READY', `date=${date} input="${formatted}" mode=canonical-input`);
+            this.log(execId, 'DATE_READY', `date=${date} input=\"${formatted}\" mode=canonical-input`);
             return;
           }
         } catch { /* try next native format */ }
@@ -374,7 +374,7 @@ class FacebookAutomationService {
       const text = await cell.innerText().catch(() => '') || '';
       if (!pattern.test(`${aria} ${text}`)) continue;
       await cell.click({ timeout: this.interactionTimeoutMs });
-      this.log(execId, 'DATE_READY', `date=${date} input="${canonicalLabel}" mode=canonical-gridcell`);
+      this.log(execId, 'DATE_READY', `date=${date} input=\"${canonicalLabel}\" mode=canonical-gridcell`);
       return;
     }
     throw new Error('FACEBOOK_DATE_CELL_NOT_FOUND');
@@ -385,13 +385,30 @@ class FacebookAutomationService {
     const scheduleDialog = this.scheduleDialog(page);
     await scheduleDialog.waitFor({ state: 'visible', timeout: this.calendarTimeoutMs });
     const trigger = scheduleDialog.locator("[aria-label='Abrir seletor de hora']:visible").first();
+
+    this.log(execId, 'TIME_DEBUG', `target=${time} triggerCount=${await trigger.count().catch(() => 0)}`);
     await trigger.waitFor({ state: 'visible', timeout: this.calendarTimeoutMs });
+    this.log(execId, 'TIME_DEBUG', `triggerVisible=${await trigger.isVisible().catch(() => false)} ariaExpanded=${await trigger.getAttribute('aria-expanded').catch(() => null)}`);
+
+    this.log(execId, 'TIME_DEBUG', 'ACTION=CLICK_TIME_TRIGGER');
     await trigger.click({ timeout: this.interactionTimeoutMs }).catch(async () => {
+      this.log(execId, 'TIME_DEBUG', 'ACTION=CLICK_TIME_TRIGGER_FORCE');
       await trigger.click({ force: true, timeout: this.interactionTimeoutMs });
     });
+    this.log(execId, 'TIME_DEBUG', `ACTION=TIME_TRIGGER_CLICKED ariaExpanded=${await trigger.getAttribute('aria-expanded').catch(() => null)}`);
 
     const options = page.locator("[role='option']:visible");
+    const optionCount = await options.count().catch(() => 0);
+    const optionDump = await options.evaluateAll(els => els.map(el => ({
+      text: (el.textContent || '').trim(),
+      ariaLabel: el.getAttribute('aria-label'),
+      ariaDisabled: el.getAttribute('aria-disabled'),
+      role: el.getAttribute('role')
+    }))).catch(() => []);
+    this.log(execId, 'TIME_DEBUG', `VISIBLE_OPTIONS count=${optionCount} data=${JSON.stringify(optionDump)}`);
+
     const exact = page.getByRole('option', { name: time, exact: true });
+    this.log(execId, 'TIME_DEBUG', `TARGET_OPTION count=${await exact.count().catch(() => 0)} requested=${time}`);
     const candidates = [
       exact,
       options.filter({ hasText: new RegExp(`^\\s*${time}\\s*$`) }).last(),
@@ -405,42 +422,55 @@ class FacebookAutomationService {
       if (await option.count().catch(() => 0) === 0) continue;
       if (!await option.isVisible().catch(() => false)) continue;
       if (await option.getAttribute('aria-disabled').catch(() => null) === 'true') continue;
+      this.log(execId, 'TIME_DEBUG', `CANDIDATE_FOUND text=\"${await option.innerText().catch(() => '')}\" role=${await option.getAttribute('role').catch(() => null)}`);
       try {
+        this.log(execId, 'TIME_DEBUG', 'ACTION=CLICK_TIME_OPTION normal');
         await option.click({ timeout: this.interactionTimeoutMs });
         await this.waitForVisibleOptionsToClose(page, 3000);
         this.log(execId, 'TIME_READY', `time=${time} mode=canonical-option`);
         return;
-      } catch {
+      } catch (normalError: any) {
+        this.log(execId, 'TIME_DEBUG', `CLICK_NORMAL_FAILED error=${normalError?.message || normalError}`, 'warn');
         try {
+          this.log(execId, 'TIME_DEBUG', 'ACTION=CLICK_TIME_OPTION force');
           await option.click({ timeout: this.interactionTimeoutMs, force: true });
           await this.waitForVisibleOptionsToClose(page, 3000);
           this.log(execId, 'TIME_READY', `time=${time} mode=canonical-option-force`);
           return;
-        } catch { /* try next Facebook time representation */ }
+        } catch (forceError: any) {
+          this.log(execId, 'TIME_DEBUG', `CLICK_FORCE_FAILED error=${forceError?.message || forceError}`, 'warn');
+        }
       }
     }
 
     const inputs = scheduleDialog.locator('input:visible');
     const inputCount = await inputs.count().catch(() => 0);
+    this.log(execId, 'TIME_DEBUG', `VISIBLE_TIME_INPUTS count=${inputCount}`);
     for (let i = 0; i < inputCount; i++) {
       const input = inputs.nth(i);
       const type = await input.getAttribute('type').catch(() => null);
       const aria = await input.getAttribute('aria-label').catch(() => '') || '';
       const placeholder = await input.getAttribute('placeholder').catch(() => '') || '';
       const value = await input.inputValue().catch(() => '');
+      this.log(execId, 'TIME_DEBUG', `INPUT index=${i} type=${type} aria=${aria} placeholder=${placeholder} value=${value}`);
       if (type !== 'time' && !/hora|time/i.test(`${aria} ${placeholder}`) && !/^\d{1,2}:\d{2}$/.test(value)) continue;
       try {
+        this.log(execId, 'TIME_DEBUG', `ACTION=FILL_TIME_INPUT index=${i} value=${time}`);
         await input.fill(time);
         await page.keyboard.press('Tab').catch(() => undefined);
         await page.waitForTimeout(250);
         const resulting = await input.inputValue().catch(() => '');
+        this.log(execId, 'TIME_DEBUG', `TIME_INPUT_RESULT index=${i} value=${resulting}`);
         if (resulting === time || resulting.includes(time)) {
           this.log(execId, 'TIME_READY', `time=${time} mode=canonical-input`);
           return;
         }
-      } catch { /* try next native time input */ }
+      } catch (inputError: any) {
+        this.log(execId, 'TIME_DEBUG', `FILL_TIME_INPUT_FAILED index=${i} error=${inputError?.message || inputError}`, 'warn');
+      }
     }
 
+    this.log(execId, 'TIME_DEBUG', `ERROR=FACEBOOK_TIME_OPTION_NOT_FOUND requested=${time}`, 'error');
     throw new Error('FACEBOOK_TIME_OPTION_NOT_FOUND');
   }
 
