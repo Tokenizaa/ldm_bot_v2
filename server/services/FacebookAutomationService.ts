@@ -275,37 +275,161 @@ class FacebookAutomationService {
   }
 
   private async openScheduleDirect(execId: string, page: Page) {
-    const button = page.locator("div[role='dialog'][aria-label='Criar post']:visible [aria-label='Programar post']").last();
-    await button.waitFor({ state: 'visible', timeout: 12000 });
-    await button.click({ timeout: this.interactionTimeoutMs });
+    const composerDialog = page.locator("div[role='dialog'][aria-label='Criar post']:visible").last();
+    await composerDialog.waitFor({ state: 'visible', timeout: 12000 });
+
+    await this.resolveMentionTypeahead(page);
+
+    const candidates = [
+      composerDialog.locator("[aria-label='Programar post']:visible").last(),
+      composerDialog.getByRole('button', { name: /Programar post/i }).last(),
+      composerDialog.locator("button:visible").filter({ hasText: /Programar post/i }).last(),
+      composerDialog.locator("[aria-label='Programar']:visible").last(),
+      page.locator("[aria-label='Programar post']:visible").last(),
+    ];
+
+    let clicked = false;
+    for (const candidate of candidates) {
+      if (await candidate.count().catch(() => 0) === 0) continue;
+      if (!await candidate.isVisible().catch(() => false)) continue;
+      try {
+        await candidate.click({ timeout: this.interactionTimeoutMs });
+        clicked = true;
+        break;
+      } catch {
+        try {
+          await candidate.click({ timeout: this.interactionTimeoutMs, force: true });
+          clicked = true;
+          break;
+        } catch { /* try next mapped Facebook variant */ }
+      }
+    }
+
+    if (!clicked) throw new Error('FACEBOOK_SCHEDULE_BUTTON_NOT_FOUND');
+    this.log(execId, 'SCHEDULE_TRIGGER_CLICKED', 'controle Programar post acionado');
+
     const dialog = this.scheduleDialog(page);
     await dialog.waitFor({ state: 'visible', timeout: 12000 });
+    this.log(execId, 'SCHEDULE_DIALOG_OPEN', 'dialog de agendamento visível');
+  }
+
+  private async resolveMentionTypeahead(page: Page) {
+    const options = page.locator("[role='option']:visible");
+    if (!await options.count().catch(() => 0)) return;
+    const todos = options.filter({ hasText: /todos|todos os membros|grupo público/i }).first();
+    if (await todos.count().catch(() => 0)) {
+      await todos.click({ timeout: 5000 }).catch(async () => { await todos.click({ timeout: 5000, force: true }).catch(() => undefined); });
+    } else {
+      await page.keyboard.press('Enter').catch(() => undefined);
+    }
+    await this.waitForVisibleOptionsToClose(page, 3000);
+  }
+
+  private async openDatePicker(page: Page, trigger: Locator) {
+    if (await page.locator("[role='gridcell']:visible").count().catch(() => 0) > 0) return;
+    await trigger.click({ timeout: this.interactionTimeoutMs }).catch(async () => {
+      await trigger.click({ force: true, timeout: this.interactionTimeoutMs });
+    });
+    await page.locator("[role='gridcell']:visible").first().waitFor({ state: 'visible', timeout: this.calendarTimeoutMs });
   }
 
   private async setDate(execId: string, page: Page, date: string) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error('FACEBOOK_DATE_INVALID');
     const target = new Date(`${date}T12:00:00-03:00`);
     if (Number.isNaN(target.getTime()) || target.getTime() <= Date.now()) throw new Error('FACEBOOK_SCHEDULE_IN_PAST');
+
     const day = String(target.getDate());
-    const monthLong = target.toLocaleDateString('pt-BR', { month: 'long' });
     const year = String(target.getFullYear());
-    const datePattern = new RegExp(`${day} de ${monthLong} de ${year}`, 'i');
+    const monthLong = target.toLocaleDateString('pt-BR', { month: 'long' });
+    const monthShort = target.toLocaleDateString('pt-BR', { month: 'short' }).replace(/\.$/, '');
+    const canonicalLabel = `${day} de ${monthShort} de ${year}`;
+
     const scheduleDialog = this.scheduleDialog(page);
     await scheduleDialog.waitFor({ state: 'visible', timeout: this.calendarTimeoutMs });
-    const cell = scheduleDialog.getByRole('gridcell', { name: datePattern }).first();
-    await cell.waitFor({ state: 'visible', timeout: this.calendarTimeoutMs });
-    await cell.click({ timeout: this.interactionTimeoutMs });
-    this.log(execId, 'DATE_READY', `date=${date} mode=canonical-gridcell-scoped`);
+
+    const trigger = scheduleDialog.getByRole('button', { name: /Abrir seletor de data/ }).first()
+      .or(scheduleDialog.getByRole('combobox', { name: /Abrir seletor de data/ }).first());
+    await trigger.waitFor({ state: 'visible', timeout: this.calendarTimeoutMs });
+
+    const inputs = scheduleDialog.locator('input:visible');
+    const inputCount = await inputs.count().catch(() => 0);
+    for (let i = 0; i < inputCount; i++) {
+      const input = inputs.nth(i);
+      const type = await input.getAttribute('type').catch(() => null);
+      const aria = await input.getAttribute('aria-label').catch(() => '') || '';
+      const placeholder = await input.getAttribute('placeholder').catch(() => '') || '';
+      const value = await input.inputValue().catch(() => '');
+      if (type !== 'date' && !/data|date/i.test(`${aria} ${placeholder}`) && !/\d{1,2} de \w+ de \d{4}/i.test(value)) continue;
+
+      for (const formatted of [canonicalLabel, `${day} de ${monthLong} de ${year}`, date]) {
+        try {
+          await input.fill(formatted);
+          await page.keyboard.press('Tab').catch(() => undefined);
+          await page.waitForTimeout(250);
+          const resulting = await input.inputValue().catch(() => '');
+          if (resulting === date || resulting.toLowerCase().includes(monthShort.toLowerCase()) || resulting.includes(day)) {
+            this.log(execId, 'DATE_READY', `date=${date} input="${formatted}" mode=canonical-input`);
+            return;
+          }
+        } catch { /* try next native format */ }
+      }
+    }
+
+    await this.openDatePicker(page, trigger);
+    const cells = page.locator("[role='gridcell']:visible");
+    const pattern = new RegExp(`\\b${day} de (?:${monthLong}|${monthShort}) de ${year}\\b`, 'i');
+    const count = await cells.count().catch(() => 0);
+    for (let i = 0; i < count; i++) {
+      const cell = cells.nth(i);
+      if (await cell.getAttribute('aria-disabled').catch(() => null) === 'true') continue;
+      const aria = await cell.getAttribute('aria-label').catch(() => '') || '';
+      const text = await cell.innerText().catch(() => '') || '';
+      if (!pattern.test(`${aria} ${text}`)) continue;
+      await cell.click({ timeout: this.interactionTimeoutMs });
+      this.log(execId, 'DATE_READY', `date=${date} input="${canonicalLabel}" mode=canonical-gridcell`);
+      return;
+    }
+
+    throw new Error('FACEBOOK_DATE_CELL_NOT_FOUND');
   }
 
   private async setTime(execId: string, page: Page, time: string) {
     if (!/^\d{2}:\d{2}$/.test(time)) throw new Error('FACEBOOK_TIME_INVALID');
+
     const scheduleDialog = this.scheduleDialog(page);
     await scheduleDialog.waitFor({ state: 'visible', timeout: this.calendarTimeoutMs });
-    const option = scheduleDialog.locator("[role='option']:visible").filter({ hasText: time }).first();
-    await option.waitFor({ state: 'visible', timeout: this.calendarTimeoutMs });
-    await option.click({ timeout: this.interactionTimeoutMs });
-    this.log(execId, 'TIME_READY', `time=${time} mode=canonical-option-scoped`);
+
+    const trigger = scheduleDialog.getByRole('button', { name: /Abrir seletor de hora/ }).first()
+      .or(scheduleDialog.getByRole('combobox', { name: /Abrir seletor de hora/ }).first());
+    await trigger.waitFor({ state: 'visible', timeout: this.calendarTimeoutMs });
+    await trigger.click({ timeout: this.interactionTimeoutMs }).catch(async () => {
+      await trigger.click({ force: true, timeout: this.interactionTimeoutMs });
+    });
+
+    const options = page.locator("[role='option']:visible");
+    const exact = page.getByRole('option', { name: time, exact: true });
+    const candidates = [exact, options.filter({ hasText: new RegExp(`^\\s*${time}\\s*$`) }).last(), options.filter({ hasText: time }).last()];
+
+    for (const option of candidates) {
+      if (await option.count().catch(() => 0) === 0) continue;
+      if (!await option.isVisible().catch(() => false)) continue;
+      if (await option.getAttribute('aria-disabled').catch(() => null) === 'true') continue;
+      try {
+        await option.click({ timeout: this.interactionTimeoutMs });
+        await this.waitForVisibleOptionsToClose(page, 3000);
+        this.log(execId, 'TIME_READY', `time=${time} mode=canonical-option`);
+        return;
+      } catch {
+        try {
+          await option.click({ timeout: this.interactionTimeoutMs, force: true });
+          await this.waitForVisibleOptionsToClose(page, 3000);
+          this.log(execId, 'TIME_READY', `time=${time} mode=canonical-option-force`);
+          return;
+        } catch { /* try next Facebook option representation */ }
+      }
+    }
+
+    throw new Error('FACEBOOK_TIME_OPTION_NOT_FOUND');
   }
 
   private async checkPostInPlanner(page: Page, groupUrl: string, content: string, _date: string, _time: string, productName?: string): Promise<PlannerCheckResult> {
