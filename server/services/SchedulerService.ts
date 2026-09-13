@@ -31,17 +31,25 @@ const STRUCTURAL_FACEBOOK_ERRORS = new Set([
 export class SchedulerService {
   private schedulerLock: Promise<void> = Promise.resolve();
   private lastScheduleOperationAt = 0;
-  private readonly minScheduleGapMs = 15000;
+  private readonly minScheduleGapMs = 10000;
+  private readonly maxScheduleGapMs = 22000;
   private lastPlannerReconciliationAt = 0;
   private readonly plannerReconciliationTtlMs = 10 * 60 * 1000;
   private readonly plannerReconciliationHorizonMs = 48 * 60 * 60 * 1000;
   private readonly plannerReconciliationMaxItems = 10;
 
   private async waitForSchedulePacing(): Promise<void> {
+    if (this.lastScheduleOperationAt === 0) {
+      this.lastScheduleOperationAt = Date.now();
+      return;
+    }
     const elapsed = Date.now() - this.lastScheduleOperationAt;
-    const remaining = this.minScheduleGapMs - elapsed;
+    const targetGap = Math.floor(
+      this.minScheduleGapMs + Math.random() * (this.maxScheduleGapMs - this.minScheduleGapMs + 1)
+    );
+    const remaining = targetGap - elapsed;
     if (remaining > 0) {
-      logger.scheduler(`SCHEDULE_PACING_WAIT ms=${remaining}`);
+      logger.scheduler(`SCHEDULE_PACING_WAIT ms=${remaining} targetGap=${targetGap}`);
       await new Promise(resolve => setTimeout(resolve, remaining));
     }
     this.lastScheduleOperationAt = Date.now();
@@ -241,8 +249,6 @@ export class SchedulerService {
             }
             if (!['draft', 'failed', 'unknown'].includes(publication.status)) continue;
           } else {
-            // Create the queue row without assuming a legacy facebook_copy exists.
-            // schedulePublication() performs the canonical copy generation/validation.
             publication = await storage.createPublication({
               product_id: product.id,
               scheduled_at: slotIso,
