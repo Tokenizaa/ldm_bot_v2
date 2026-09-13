@@ -1,69 +1,144 @@
-# Plano Geral de Manutenção — LDM Bot
+# Plano Geral de Manutenção — LDM Bot v2
 
 ## Objetivo
 
-Estabelecer uma única regra de verdade para planejamento, publicação real no Facebook, contagem, deduplicação e exposição pública, eliminando estados ambíguos e evitando que o sistema avance com dados apenas marcados como concluídos.
+Estabelecer uma única regra de verdade para produtos, links afiliados, conteúdo, planejamento, publicação real no Facebook, contagem, deduplicação e exposição pública.
 
-## Regra operacional de calendário
+Princípio central:
 
-- O mês parcial inicial termina no último dia do mês corrente.
-- O mês parcial inicial não consome a cota mensal de 150 publicações.
-- A partir do primeiro mês calendário seguinte, o limite é de 150 publicações por mês.
-- O limite diário permanece em 5 publicações.
-- O último dia de cada mês é calculado dinamicamente; não existe período fixo de 30 dias.
-- O processo continua mês a mês enquanto existirem produtos elegíveis.
+> **Crawler prepara o produto. Banco guarda o produto pronto. Scheduler apenas agenda. Facebook confirma a publicação.**
 
-## Fases
+Estados técnicos continuam internos para retry, timeout, reconciliação e diagnóstico. A visão de negócio continua binária: **Publicado** ou **Não publicado**.
 
-### Fase 1 — Calendário e quota
+## Regras operacionais
+
+- Calendário real, mês a mês.
+- Limite diário: 5 publicações.
+- Limite mensal: 150 a partir do primeiro mês calendário completo.
+- Mês parcial inicial não consome a quota mensal.
+- Produto só pode ser reservado uma vez por grupo enquanto a publicação estiver ativa ou incerta.
+- `published` só existe com evidência real de publicação.
+- Sitemap só considera publicação realmente publicada.
+- O link afiliado canônico é produzido por `buildAffiliateUrl()` e segue `/20889?afiliado=<GLOBAL_CODE>`.
+- A copy Facebook deve estar pronta no banco antes do Scheduler iniciar o agendamento.
+- O Scheduler não deve usar a IA como etapa normal de preparação do produto.
+
+## Fase 1 — Calendário e quota
+
 - Corrigir o conceito de ciclo mensal para calendário real.
 - Tratar o primeiro mês parcial sem consumir a quota mensal.
 - Aplicar 150/mês a partir do mês calendário seguinte.
 - Manter 5/dia.
-- Garantir que a geração percorra corretamente até o último dia do mês.
-- Validar contagem de reservas futuras sem ultrapassar a quota mensal.
+- Percorrer corretamente até o último dia de cada mês.
+- Validar contagem de reservas futuras sem ultrapassar quota.
 
-### Fase 2 — Máquina de estados e integridade
-- Revisar todas as transições `draft → attempting/publishing → scheduled/unknown/failed`.
-- Garantir que `published` só seja usado com evidência real de publicação.
-- Revisar recuperação de `publishing`/`unknown`.
-- Impedir que falhas do Facebook deixem registros falsamente confirmados.
+**Status: concluída.**
 
-### Fase 3 — Deduplicação e contadores
+## Fase 2 — Máquina de estados e integridade
+
+- Revisar transições `draft → attempting/publishing → scheduled/unknown/failed`.
+- Garantir que `published` só seja usado com evidência real.
+- Recuperar tentativas presas.
+- Manter `unknown` bloqueado contra retry cego quando a reconciliação do Planner falhar.
+
+**Status: concluída.**
+
+## Fase 3 — Deduplicação, contadores e status de negócio
+
 - Auditar identidade de produto, idempotência e slots.
 - Impedir duplicação do mesmo produto com as mesmas características.
 - Permitir variantes legítimas.
-- Unificar contadores de diário/mensal/dashboard com a mesma fonte de verdade.
+- Unificar contadores diário/mensal/dashboard.
+- Separar estados técnicos da visão de negócio `Publicado` / `Não publicado`.
 
-### Fase 4 — Facebook Planner
+**Status: concluída.**
+
+## Fase 4 — Reconciliação e saneamento do banco
+
+### Objetivo
+
+Deixar os dados existentes em estado coerente antes da reconciliação com o Facebook Planner.
+
+### Produto
+
+Para cada produto existente:
+
+- `product_identity_key` único e coerente.
+- `original_url` válida e canônica.
+- `affiliate_url` reconstruída pelo padrão oficial atual.
+- Nenhum link legado `/20889` sem `?afiliado=`.
+- Nome, preço, categoria e marca válidos.
+- SKU preservado quando existente.
+- Imagem preservada quando existente.
+- Copy Facebook pronta, válida e sem raciocínio/metatexto da IA.
+- Copy sem preço, URL ou informações proibidas.
+- Hashtags e `@todos` controlados pelo sistema.
+
+### Conteúdo e arquitetura
+
+Fluxo correto:
+
+`Crawler → coleta → normalização → link afiliado → IA → validação → affiliate_links.facebook_copy → Scheduler`
+
+O Scheduler não deve ser o responsável normal por gerar ou reparar copy. Deve consumir um produto já preparado e, se o produto estiver incompleto, bloquear o agendamento e registrar `PRODUCT_NOT_READY`.
+
+Uma barreira de segurança pode continuar existindo no backend, mas não deve mascarar a falta de preparação do crawler.
+
+### Publicações
+
+- `posts` continua separado de `affiliate_links`.
+- Publicações existentes são preservadas para a futura reconciliação com o Planner.
+- Nenhuma publicação existente é convertida artificialmente em `published`.
+- Neste momento, publicação real confirmada = 0.
+- Produtos sem post continuam disponíveis para planejamento depois da reconciliação.
+
+### Critério de saída
+
+A fase só é concluída quando produtos, links e conteúdo estiverem reconciliados; o fluxo crawler → banco → scheduler estiver coerente; `published` continuar representando somente publicação real; e não existirem inconsistências conhecidas que contaminem a futura reconciliação do Planner.
+
+## Fase 5 — Facebook Planner
+
 - Auditar criação, confirmação e reconciliação dos agendamentos.
-- Garantir que um registro `scheduled` corresponda a um agendamento verificável no Planner.
-- Preservar a sessão persistente, locks e reconciliação periódica.
+- Garantir que `scheduled` corresponda a um agendamento verificável no Planner.
+- Reconciliar registros existentes sem apagar evidências.
+- Tratar ausentes como candidatos a recriação segura.
+- Preservar sessão persistente, locks, pacing e reconciliação periódica.
+- Executar teste real controlado.
 
-### Fase 5 — Sitemap e publicação pública
-- Localizar e auditar toda geração de sitemap.
-- Sitemap deve conter somente publicações realmente publicadas.
+## Fase 6 — Sitemap e publicação pública
+
+- Auditar toda geração de sitemap.
+- Sitemap contém somente publicações realmente publicadas.
 - Excluir `draft`, `scheduled`, `attempting/publishing`, `unknown`, `failed` e registros incertos.
 - Exigir URL pública válida e única.
 - Deduplicar URLs/entradas.
-- Não contar uma publicação como publicada apenas porque foi criada, marcada ou agendada.
 
-### Fase 6 — Crawler, produtos e conteúdo
-- Auditar origem dos produtos, identidade, SKU, links e elegibilidade.
-- Garantir que preço seja controle interno e não seja publicado no texto.
-- Auditar geração/reparo da copy e hashtags/@todos.
-- Validar links afiliados e Open Graph.
+## Fase 7 — Auditoria geral
 
-### Fase 7 — Auditoria ponta a ponta e testes
-- Build e testes automatizados.
-- Testes de calendário para meses de 28/29/30/31 dias.
-- Testes de quota mensal e limite diário.
-- Testes de deduplicação.
-- Testes de transição de estados.
-- Testes de sitemap com mistura de estados.
-- Validação controlada no Facebook real.
-- Registrar resultado final e critérios de encerramento.
+- Crawler.
+- Produtos e identidade.
+- Links afiliados.
+- Copy/IA/hashtags/@todos.
+- Scheduler.
+- Playwright/Facebook.
+- Persistência e integridade do banco.
+- API e frontend.
+- Mocks, stubs, configurações legadas e código morto.
+- Remover bloqueios reais encontrados sem quebrar as proteções de produção.
+
+## Fase 8 — Produção e fechamento
+
+- Build final.
+- Testes automatizados.
+- Fluxo ponta a ponta.
+- Validação real controlada no Facebook.
+- Revisão final de duplicidade.
+- Validação do sitemap.
+- Documentação final.
+- Commit final de fechamento.
 
 ## Regra de execução
 
-Cada fase deve resultar em um commit independente e validável. Não avançar de fase com build/testes quebrados ou com regressões conhecidas. Nenhum commit deve alterar arquitetura, locks, idempotência ou sessão persistente sem justificativa explícita no próprio commit/documentação.
+Cada fase deve ser uma rodada completa: **investigar → corrigir → testar → validar → commitar → atualizar `main` → registrar resultado**.
+
+Não avançar com regressões conhecidas. Não criar commits intermediários burocráticos para uma mesma fase.
