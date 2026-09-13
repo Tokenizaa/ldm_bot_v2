@@ -11,7 +11,8 @@
     "lint": "tsc --noEmit",
     "scrape:150": "tsx scripts/scrape-150.ts",
     "test:affiliate": "tsx scripts/test-affiliate-url.ts",
-    "backfill:copy": "tsx scripts/backfill-facebook-copy.ts"
+    "backfill:copy": "tsx scripts/backfill-facebook-copy.ts",
+    "facebook:cleanup": "tsx scripts/cleanup-facebook-scheduled.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.116.0",
@@ -25,12 +26,13 @@
     "playwright": "^1.63.0",
     "react": "^19.0.1",
     "react-dom": "^19.0.1",
-    "vite": "^6.2.3"
+    "vite": "^6.2.3",
+    "esbuild": "^0.25.0"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",
     "autoprefixer": "^10.4.21",
-    "tailwindcss": "^4.1.14",
+    "tailwindcss": "^4.1.21",
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",
     "vite": "^6.2.3",
