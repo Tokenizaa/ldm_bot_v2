@@ -224,9 +224,15 @@ export class SchedulerService {
       // A chave de identidade do produto é a única regra de deduplicação.
       // O histórico persiste o produto assim que o Facebook confirma o agendamento.
       const publishedIdentityKeys = await storage.getPublishedProductIdentityKeys(normalizeGroupUrl(settings.facebook_group_url));
+      const publishedProductIds = await storage.getPublishedProductIds(normalizeGroupUrl(settings.facebook_group_url));
       const products = await storage.getProducts(true);
       const candidates = products.filter(p => {
         if (usedProducts.has(p.id)) return false;
+        if (publishedProductIds.has(p.id)) {
+          logger.scheduler('PRODUCT_ALREADY_USED_BLOCKED product=' + p.id + ' reason=posts_ledger');
+          usedProducts.add(p.id);
+          return false;
+        }
         if (publishedIdentityKeys.has(p.product_identity_key)) {
           logger.scheduler('PRODUCT_ALREADY_USED_BLOCKED product=' + p.id + ' identity=' + p.product_identity_key);
           usedProducts.add(p.id);
@@ -268,7 +274,7 @@ export class SchedulerService {
           }
           const product = candidates[candidateIndex++];
           if (!product) break outer;
-          if (publishedIdentityKeys.has(product.product_identity_key)) {
+          if (publishedProductIds.has(product.id) || publishedIdentityKeys.has(product.product_identity_key)) {
             logger.scheduler('PRODUCT_ALREADY_USED_GUARD product=' + product.id + ' identity=' + product.product_identity_key);
             usedProducts.add(product.id);
             continue;
