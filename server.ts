@@ -8,7 +8,7 @@ async function startServer() {
   const { apiRouter } = await import('./server/routes/api.js');
   const { authRouter } = await import('./server/routes/auth.js');
   const { frontendCompatRouter } = await import('./server/routes/frontend-compat.js');
-  const { scheduler } = await import('./server/services/SchedulerService.js');
+  const { scheduler } = await import('./server/services/RuntimeSchedulerService.js');
 
   const app = express();
   const PORT = 3000;
@@ -34,8 +34,7 @@ async function startServer() {
 
   app.listen(PORT, '0.0.0.0', () => {
     logger.system(`ForgeDeals Server running on http://0.0.0.0:${PORT}`);
-    // The HTTP server only starts the application scheduler.
-    // Facebook browser/session/navigation details stay inside the service layer.
+    // The scheduler keeps publication state only in memory. Startup never creates DB publication rows.
     void scheduler.start();
   });
 }
