@@ -34,15 +34,25 @@ export class ContentService {
   }
 
   /**
-   * Reuses a persisted copy only when it passes the canonical publication gate.
-   * Invalid legacy rows are regenerated through the same deterministic safety path.
+   * Publication-time safety gate only.
+   *
+   * The Scheduler consumes product data prepared by the crawler. It must not
+   * silently invoke the AI as part of normal scheduling. Missing or invalid
+   * persisted copy is a readiness error and must be repaired by the crawler
+   * pipeline before the product becomes schedulable.
    */
-  async ensureCopyForPublication(product: Product, existingCopy?: string, customModel?: string): Promise<GeneratedProductCopy> {
+  async ensureCopyForPublication(product: Product, existingCopy?: string): Promise<GeneratedProductCopy> {
     const affiliateUrl = buildAffiliateUrl(product.affiliate_url || product.original_url);
     if (!affiliateUrl.includes('/20889?afiliado=')) {
       throw new Error('URL de afiliado inválida: ' + affiliateUrl);
     }
-    const content = await this.copyAgent.ensurePublicationCopy(product, existingCopy, customModel);
+
+    const content = String(existingCopy || '').trim();
+    if (!content || !this.copyAgent.isPublicationReady(content, product)) {
+      logger.scheduler(`PRODUCT_NOT_READY product=${product.id} reason=facebook_copy_missing_or_invalid`, 'warn');
+      throw new Error('PRODUCT_NOT_READY');
+    }
+
     return { content, affiliateUrl };
   }
 }
