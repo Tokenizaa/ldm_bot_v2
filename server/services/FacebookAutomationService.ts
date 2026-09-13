@@ -136,6 +136,15 @@ class FacebookAutomationService {
     }
   }
 
+  private async waitForVisibleOptionsToClose(page: Page, timeoutMs: number) {
+    const started = Date.now();
+    while (Date.now() - started < timeoutMs) {
+      const visibleOptions = await page.locator("[role='option']:visible").count().catch(() => 0);
+      if (visibleOptions === 0) return;
+      await page.waitForTimeout(100);
+    }
+  }
+
   private async activateToken(execId: string, page: Page, token: string, requireOption: boolean) {
     const options = page.locator("[role='option']:visible");
     if (requireOption) await options.first().waitFor({ state: 'visible', timeout: this.tokenActivationTimeoutMs });
@@ -145,7 +154,7 @@ class FacebookAutomationService {
     await editor.click({ position: { x: 4, y: 4 } });
     await editor.press('End').catch(() => undefined);
     await page.keyboard.press('Enter');
-    if (requireOption) await page.waitForFunction(() => document.querySelectorAll("[role='option']:visible").length === 0, null, { timeout: 3000 });
+    if (requireOption) await this.waitForVisibleOptionsToClose(page, 3000);
     this.log(execId, 'TOKEN_ACTIVATED', `token=${token} delayMs=${this.tokenActivationDelayMs}`);
   }
 
@@ -216,7 +225,7 @@ class FacebookAutomationService {
     const options = page.locator("[role='option']:visible");
     if (await options.count().catch(() => 0)) {
       await page.keyboard.press('Enter');
-      await options.first().waitFor({ state: 'hidden', timeout: 3000 }).catch(() => undefined);
+      await this.waitForVisibleOptionsToClose(page, 3000);
     }
     await button.click({ timeout: this.interactionTimeoutMs });
     const dialog = page.locator("[role='dialog']:visible").filter({ has: page.getByRole('combobox', { name: /Abrir seletor de data/ }) }).first();
