@@ -1,5 +1,9 @@
 -- Fase 3 — proteção de inserção contra duplicidade e excesso de agenda.
 -- Aplicada no Supabase em 13/09/2026.
+--
+-- Regra de exceção adicionada na Fase 5:
+-- um draft explicitamente criado pela reconciliação após ausência confirmada no
+-- Facebook Planner não representa uma reserva ativa e não deve bloquear a recriação.
 
 CREATE OR REPLACE FUNCTION public.prevent_duplicate_post_insert()
 RETURNS trigger
@@ -19,6 +23,10 @@ BEGIN
     WHERE p.affiliate_link_id = NEW.affiliate_link_id
       AND COALESCE(p.group_id, '') = COALESCE(NEW.group_id, '')
       AND p.status <> 'cancelled'
+      AND NOT (
+        p.status = 'draft'
+        AND p.error_message = 'Agendamento não encontrado no planner Facebook; liberado para recriação segura.'
+      )
   ) THEN
     RAISE EXCEPTION 'POST_PRODUCT_DUPLICATE: produto % já possui publicação para o grupo %', NEW.affiliate_link_id, NEW.group_id USING ERRCODE = '23505';
   END IF;
