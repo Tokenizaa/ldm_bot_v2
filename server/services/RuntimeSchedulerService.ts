@@ -15,6 +15,8 @@ const STRUCTURAL_FACEBOOK_ERRORS = new Set([
 
 type RuntimeState = { publication: Publication; product: Product };
 
+type TimedStage = <T>(stage: string, operation: () => Promise<T>) => Promise<T>;
+
 export class RuntimeSchedulerService {
   private readonly runtime = new Map<string, RuntimeState>();
   private readonly usedProducts = new Set<string>();
@@ -23,6 +25,19 @@ export class RuntimeSchedulerService {
   private readonly minScheduleGapMs = 10000;
   private readonly maxScheduleGapMs = 22000;
   private lock: Promise<void> = Promise.resolve();
+
+  private async timedStage<T>(stage: string, operation: () => Promise<T>): Promise<T> {
+    const startedAt = Date.now();
+    logger.scheduler(`[Timing] START ${stage}`);
+    try {
+      const result = await operation();
+      logger.scheduler(`[Timing] END ${stage} durationMs=${Date.now() - startedAt}`);
+      return result;
+    } catch (error: any) {
+      logger.scheduler(`[Timing] FAIL ${stage} durationMs=${Date.now() - startedAt} error=${error?.message || error}`, 'error');
+      throw error;
+    }
+  }
 
   private async withLock<T>(operation: () => Promise<T>): Promise<T> {
     const previous = this.lock;
@@ -42,12 +57,16 @@ export class RuntimeSchedulerService {
   }
 
   async start(): Promise<void> {
+    const startedAt = Date.now();
+    logger.scheduler('[Timing] START scheduler.start');
     try {
-      const status = await facebookSession.start();
+      const status = await this.timedStage('facebookSession.start', () => facebookSession.start());
       logger.scheduler(`FACEBOOK_STARTUP status=${status.status}`);
       if (!status.connected) logger.scheduler('RUNTIME_SCHEDULER_READY Facebook não autenticado; agendamento aguardará conexão.', 'warn');
       else logger.scheduler('RUNTIME_SCHEDULER_READY catálogo carregado sob demanda; nenhum agendamento é persistido no banco.');
+      logger.scheduler(`[Timing] END scheduler.start durationMs=${Date.now() - startedAt}`);
     } catch (error: any) {
+      logger.scheduler(`[Timing] FAIL scheduler.start durationMs=${Date.now() - startedAt} error=${error.message}`, 'error');
       logger.scheduler(`RUNTIME_SCHEDULER_START_FAILED ${error.message}`, 'error');
     }
   }
@@ -73,7 +92,9 @@ export class RuntimeSchedulerService {
 
   async ensureMonthlySchedule(targetDateStr?: string): Promise<{ scheduled: Publication[]; quota: OperationalQuota; message: string }> {
     return this.withLock(async () => {
-      const settings = await storage.getSettings();
+      const startedAt = Date.now();
+      logger.scheduler('[Timing] START ensureMonthlySchedule');
+      const settings = await this.timedStage('storage.getSettings', () => storage.getSettings());
       const now = new Date();
       const anchor = targetDateStr ? new Date(`${targetDateStr}T12:00:00-03:00`) : now;
       const anchorLocal = localDateString(anchor);
@@ -84,17 +105,22 @@ export class RuntimeSchedulerService {
       const monthlyLimit = monthPrefix === currentMonth && currentDay > 1 ? Number.MAX_SAFE_INTEGER : settings.monthly_limit;
       const hours = settings.daily_hours?.length ? settings.daily_hours : DEFAULT_HOURS;
       const groupUrl = normalizeGroupUrl(settings.facebook_group_url);
-      const products = (await storage.getProducts(true)).filter(p =>
+      const products = await this.timedStage('storage.getProducts', async () => (await storage.getProducts(true)).filter(p =>
         p.current_price > 0 && Boolean(p.product_name) && /^https?:\/\//i.test(p.original_url) &&
         /^https?:\/\//i.test(p.affiliate_url) && p.affiliate_url.includes('/20889') && Boolean(p.facebook_copy?.trim())
-      );
+      ));
+      logger.scheduler(`[Timing] PRODUCTS_ELIGIBLE count=${products.length}`);
 
-      if (!products.length) return { scheduled: [], quota: this.quota(settings, anchor), message: 'Nenhum produto real e elegível disponível.' };
+      if (!products.length) {
+        logger.scheduler(`[Timing] END ensureMonthlySchedule durationMs=${Date.now() - startedAt} reason=no-products`);
+        return { scheduled: [], quota: this.quota(settings, anchor), message: 'Nenhum produto real e elegível disponível.' };
+      }
 
       const scheduled: Publication[] = [];
       let candidateIndex = 0;
       let structuralFailure: string | null = null;
       const dates = monthDates(year, month);
+      logger.scheduler(`[Timing] SCHEDULE_PLAN month=${monthPrefix} days=${dates.length} dailyLimit=${settings.daily_limit} monthlyLimit=${monthlyLimit === Number.MAX_SAFE_INTEGER ? 'bootstrap-unlimited' : monthlyLimit}`);
 
       outer: for (const date of dates) {
         const alreadyToday = [...this.runtime.values()].filter(x => x.publication.status === 'scheduled' && localDateString(new Date(x.publication.scheduled_at)) === date).length;
@@ -113,8 +139,11 @@ export class RuntimeSchedulerService {
           }
           if (!product) break outer;
 
+          logger.scheduler(`[Timing] START product-cycle product=${product.id} slot=${date}T${time}`);
+          const copyStartedAt = Date.now();
           const prepared = await contentService.ensureCopyForPublication(product, product.facebook_copy);
           const content = prepared.content.trim();
+          logger.scheduler(`[Timing] END contentService.ensureCopyForPublication durationMs=${Date.now() - copyStartedAt} product=${product.id}`);
           if (!contentService.isPublicationCopySafe(product, content)) {
             logger.scheduler(`RUNTIME_COPY_REJECTED product=${product.id}`, 'warn');
             continue;
@@ -126,11 +155,11 @@ export class RuntimeSchedulerService {
           this.usedSlots.add(slotIso);
 
           try {
-            await this.pace();
-            const result = await facebookAutomation.schedule({
+            await this.timedStage(`pace product=${product.id}`, () => this.pace());
+            const result = await this.timedStage(`facebookAutomation.schedule product=${product.id} slot=${date}T${time}`, () => facebookAutomation.schedule({
               groupUrl, content, affiliateUrl: product.affiliate_url, scheduledDate: date, scheduledTime: time,
               productName: product.product_name, sku: product.sku, preCheckPlanner: true
-            });
+            }));
 
             if (result.success) {
               publication.status = 'scheduled';
@@ -166,6 +195,7 @@ export class RuntimeSchedulerService {
       const message = structuralFailure
         ? `Agendamento interrompido por falha estrutural do Facebook: ${structuralFailure}`
         : `${scheduled.length} agendamento(s) confirmado(s) no Facebook.`;
+      logger.scheduler(`[Timing] END ensureMonthlySchedule durationMs=${Date.now() - startedAt} scheduled=${scheduled.length} structuralFailure=${structuralFailure || 'none'}`);
       return { scheduled, quota, message };
     });
   }
@@ -173,12 +203,14 @@ export class RuntimeSchedulerService {
   async scheduleDailyBatch(targetDateStr?: string) { return this.ensureMonthlySchedule(targetDateStr); }
 
   async createPublication(productId: string, scheduledAt: string, content: string, groupUrl?: string): Promise<Publication> {
-    const product = await storage.getProductById(productId);
+    const startedAt = Date.now();
+    const product = await this.timedStage('storage.getProductById', () => storage.getProductById(productId));
     if (!product) throw new Error('Produto não encontrado.');
-    const settings = await storage.getSettings();
-    const safe = await contentService.ensureCopyForPublication(product, content || product.facebook_copy);
+    const settings = await this.timedStage('storage.getSettings', () => storage.getSettings());
+    const safe = await this.timedStage('contentService.ensureCopyForPublication', () => contentService.ensureCopyForPublication(product, content || product.facebook_copy));
     const publication = this.makePublication(product, scheduledAt, safe.content.trim(), normalizeGroupUrl(groupUrl || settings.facebook_group_url));
     this.runtime.set(publication.id, { publication, product });
+    logger.scheduler(`[Timing] END createPublication durationMs=${Date.now() - startedAt} publication=${publication.id}`);
     return publication;
   }
 
@@ -189,8 +221,8 @@ export class RuntimeSchedulerService {
     if (publication.status === 'scheduled') return publication;
     const date = localDateString(new Date(publication.scheduled_at));
     const time = new Intl.DateTimeFormat('en-GB', { timeZone: TIME_ZONE, hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(publication.scheduled_at));
-    await this.pace();
-    const result = await facebookAutomation.schedule({ groupUrl: publication.facebook_group_url || '', content: publication.content, affiliateUrl: product.affiliate_url, scheduledDate: date, scheduledTime: time, productName: product.product_name, sku: product.sku, preCheckPlanner: true });
+    await this.timedStage(`pace product=${product.id}`, () => this.pace());
+    const result = await this.timedStage(`facebookAutomation.schedule product=${product.id} slot=${date}T${time}`, () => facebookAutomation.schedule({ groupUrl: publication.facebook_group_url || '', content: publication.content, affiliateUrl: product.affiliate_url, scheduledDate: date, scheduledTime: time, productName: product.product_name, sku: product.sku, preCheckPlanner: true }));
     publication.updated_at = new Date().toISOString();
     publication.planner_url = result.plannerUrl;
     publication.status = result.success ? 'scheduled' : (result.uncertain ? 'unknown' : 'failed');
@@ -209,7 +241,7 @@ export class RuntimeSchedulerService {
     const { publication, product } = state;
     const date = localDateString(new Date(publication.scheduled_at));
     const time = new Intl.DateTimeFormat('en-GB', { timeZone: TIME_ZONE, hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(publication.scheduled_at));
-    const check = await facebookAutomation.checkScheduledPost(publication.facebook_group_url || '', publication.content, date, time, product.product_name);
+    const check = await this.timedStage(`facebookAutomation.checkScheduledPost product=${product.id}`, () => facebookAutomation.checkScheduledPost(publication.facebook_group_url || '', publication.content, date, time, product.product_name));
     if (check.found) { publication.status = 'scheduled'; publication.planner_url = check.plannerUrl; publication.error_message = undefined; }
     return publication;
   }
