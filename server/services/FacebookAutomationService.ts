@@ -542,7 +542,7 @@ class FacebookAutomationService {
     return { success: false, message: 'FACEBOOK_TEST_PUBLISH_DISABLED: use o fluxo de agendamento real.' };
   }
 
-  private async getFacebookExistingProductText(groupUrl: string): Promise<string> {
+  async getFacebookExistingProductText(groupUrl: string): Promise<string> {
     const page = await facebookBrowser.getOperationalPage();
     await facebookSession.requireAuthenticated();
     const plannerUrl = groupUrl.replace(/\/+$/, '') + '/scheduled_posts';
