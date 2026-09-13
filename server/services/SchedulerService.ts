@@ -178,8 +178,12 @@ export class SchedulerService {
       const anchorLocal = localDateString(anchor);
       const [year, month] = anchorLocal.split('-').map(Number);
       const monthPrefix = `${year}-${String(month).padStart(2, '0')}`;
+      const currentMonthPrefix = localDateString(now).slice(0, 7);
+      const currentDay = Number(localDateString(now).slice(8, 10));
+      const isBootstrapPartialMonth = monthPrefix === currentMonthPrefix && currentDay > 1;
+      const monthlyLimit = isBootstrapPartialMonth ? Number.MAX_SAFE_INTEGER : settings.monthly_limit;
       const all = await storage.getPublications();
-      logger.scheduler(`MONTHLY_SCAN month=${monthPrefix} localNow=${localDateString(now)}`);
+      logger.scheduler(`MONTHLY_SCAN month=${monthPrefix} localNow=${localDateString(now)} monthlyLimit=${isBootstrapPartialMonth ? 'UNLIMITED_BOOTSTRAP_PARTIAL_MONTH' : settings.monthly_limit}`);
 
       await this.recoverStaleAttemptingPublications(all, now.getTime());
       const recoveredAll = await storage.getPublications();
@@ -200,11 +204,13 @@ export class SchedulerService {
         return ref.startsWith(monthPrefix) || localDateString(new Date(ref)).startsWith(monthPrefix);
       }).length;
 
-      if (reservedMonth >= settings.monthly_limit) {
+      if (reservedMonth >= monthlyLimit) {
         return {
           scheduled: [],
           quota: await storage.getQuota(refreshedAll, settings),
-          message: `Meta mensal já preenchida (${reservedMonth}/${settings.monthly_limit}).`
+          message: isBootstrapPartialMonth
+            ? `Mês parcial de bootstrap já não possui slots disponíveis.`
+            : `Meta mensal já preenchida (${reservedMonth}/${settings.monthly_limit}).`
         };
       }
 
@@ -250,7 +256,7 @@ export class SchedulerService {
       outer: for (const date of monthDates(year, month)) {
         for (const time of hours) {
           const totalConfirmedThisMonth = reservedMonth + scheduled.filter(p => p.status === 'scheduled').length;
-          if (totalConfirmedThisMonth >= settings.monthly_limit) break outer;
+          if (totalConfirmedThisMonth >= monthlyLimit) break outer;
 
           const confirmedToday = confirmed.filter(c => localDateString(new Date(c.published_at || c.scheduled_at)) === date).length;
           const scheduledToday = scheduled.filter(s => s.status === 'scheduled' && localDateString(new Date(s.scheduled_at)) === date).length;
@@ -315,7 +321,7 @@ export class SchedulerService {
       const confirmedCount = scheduled.filter(p => p.status === 'scheduled').length;
       const message = structuralFailure
         ? `Agendamento interrompido por falha estrutural do Facebook: ${structuralFailure}`
-        : `${confirmedCount} agendamento(s) confirmado(s) no Facebook.`;
+        : `${confirmedCount} agendamento(s) confirmado(s) no Facebook).`;
       logger.scheduler(
         `MONTHLY_DONE month=${monthPrefix} confirmed=${confirmedCount} quota=${quota.monthly_publication_count}/${quota.monthly_limit}${structuralFailure ? ' halted=' + structuralFailure : ''}`,
         structuralFailure ? 'warn' : 'success'
