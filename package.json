@@ -10,6 +10,7 @@
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
     "scrape:150": "tsx scripts/scrape-150.ts",
+    "test:affiliate": "tsx scripts/test-affiliate-url.ts",
     "backfill:copy": "tsx scripts/backfill-facebook-copy.ts"
   },
   "dependencies": {
