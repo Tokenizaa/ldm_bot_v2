@@ -25,17 +25,8 @@ export interface FacebookScheduleResult {
   error?: string;
 }
 
-interface PlannerCheckResult {
-  found: boolean;
-  plannerUrl: string;
-  snippet?: string;
-  verified: boolean;
-}
-
 class FacebookAutomationService {
   private chain: Promise<void> = Promise.resolve();
-  private schedulesSincePlannerVerification = 0;
-  private readonly plannerVerificationInterval = 5;
   private readonly tokenActivationTimeoutMs = 5000;
   private readonly tokenStabilityPollMs = 75;
   private readonly tokenStabilityWindowMs = 250;
@@ -59,12 +50,12 @@ class FacebookAutomationService {
   }
 
   private composer(page: Page): Locator {
-    return page.locator("[aria-label='Escreva algo...']:visible")
-      .or(page.locator('[role="button"]:visible').filter({ hasText: 'Escreva algo...' })).first();
+    return page.locator("[aria-label='Escreva algo...']:visible,[aria-label='No que você está pensando?']:visible,[aria-label='Criar publicação']:visible")
+      .or(page.locator('[role="button"]:visible').filter({ hasText: /Escreva algo|No que você está pensando|Criar publicação/ })).first();
   }
 
   private editor(page: Page): Locator {
-    return page.locator("div[role='dialog'][aria-label='Criar post'] [role='textbox']").first();
+    return page.locator('[role="dialog"] [data-lexical-editor="true"][contenteditable="true"]:not([aria-label*="Comente" i]),[role="dialog"] [contenteditable="true"][role="textbox"]:not([aria-label*="Comente" i]),div[role="dialog"] [role="textbox"]').first();
   }
 
   private isGroupPage(page: Page, groupUrl: string) {
@@ -116,7 +107,6 @@ class FacebookAutomationService {
       this.log(execId, 'COMPOSER_READY', 'dialog canônico já renderizado');
       return;
     }
-
     await this.closeResidualDialogs(page);
     const trigger = this.composer(page);
     await trigger.waitFor({ state: 'visible', timeout: 12000 });
@@ -148,22 +138,14 @@ class FacebookAutomationService {
 
   private async activateToken(execId: string, page: Page, token: string, requireOption: boolean) {
     const options = page.locator("[role='option']:visible");
-    if (requireOption) {
-      await options.first().waitFor({ state: 'visible', timeout: this.tokenActivationTimeoutMs });
-    }
-
+    if (requireOption) await options.first().waitFor({ state: 'visible', timeout: this.tokenActivationTimeoutMs });
     await this.waitForEditorStable(page, token);
     await page.waitForTimeout(this.tokenActivationDelayMs);
-
     const editor = this.editor(page);
     await editor.click({ position: { x: 4, y: 4 } });
     await editor.press('End').catch(() => undefined);
     await page.keyboard.press('Enter');
-
-    if (requireOption) {
-      await page.waitForFunction(() => document.querySelectorAll("[role='option']:visible").length === 0, null, { timeout: 3000 });
-    }
-
+    if (requireOption) await page.waitForFunction(() => document.querySelectorAll("[role='option']:visible").length === 0, null, { timeout: 3000 });
     this.log(execId, 'TOKEN_ACTIVATED', `token=${token} delayMs=${this.tokenActivationDelayMs}`);
   }
 
@@ -193,7 +175,6 @@ class FacebookAutomationService {
     const finalText = copy.trim() + '\n\n' + affiliateUrl;
     await editor.click();
     await editor.fill('');
-
     const tokenPattern = /(@todos|#[\p{L}\p{N}_]+)/gu;
     let last = 0;
     for (const match of finalText.matchAll(tokenPattern)) {
@@ -205,7 +186,6 @@ class FacebookAutomationService {
       await this.activateToken(execId, page, token, token.toLowerCase() === '@todos');
       last = index + token.length;
     }
-
     const tail = finalText.slice(last);
     if (tail) {
       await this.typeComposerText(editor, tail);
@@ -214,9 +194,20 @@ class FacebookAutomationService {
         await page.waitForTimeout(500);
         await editor.press('Space');
         if (!await this.waitForAffiliatePreview(page, affiliateUrl)) throw new Error('FACEBOOK_LINK_PREVIEW_INPUT_FAILED');
-        this.log(execId, 'LINK_PREVIEW_READY', `url=${affiliateUrl}`);
       }
     }
+    const ready = await page.waitForFunction(url => {
+      const dialogs = [...document.querySelectorAll("[role='dialog']")];
+      const dialog = dialogs.at(-1);
+      if (!dialog) return false;
+      const textbox = dialog.querySelector('[role="textbox"]');
+      const text = textbox?.textContent || '';
+      const links = dialog.querySelectorAll("a[href*='lojadomecanico'],a[href*='mecanico']").length;
+      const body = dialog.textContent || '';
+      return text.includes(url) || links > 0 || (/loja do mecânico|lojadomecanico|mecânico/i.test(body) && dialog.querySelectorAll('img').length > 0);
+    }, affiliateUrl, { timeout: this.previewTimeoutMs }).catch(() => false);
+    if (!ready && !await this.waitForAffiliatePreview(page, affiliateUrl, this.previewFastTimeoutMs)) throw new Error('FACEBOOK_LINK_PREVIEW_INPUT_FAILED');
+    this.log(execId, 'LINK_PREVIEW_READY', `url=${affiliateUrl}`);
   }
 
   private async openScheduleDirect(execId: string, page: Page) {
@@ -236,16 +227,14 @@ class FacebookAutomationService {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error('FACEBOOK_DATE_INVALID');
     const target = new Date(`${date}T12:00:00-03:00`);
     if (Number.isNaN(target.getTime()) || target.getTime() <= Date.now()) throw new Error('FACEBOOK_SCHEDULE_IN_PAST');
-
     const day = String(target.getDate());
     const monthLong = target.toLocaleDateString('pt-BR', { month: 'long' });
     const year = String(target.getFullYear());
     const datePattern = new RegExp(`(?:domingo|segunda-feira|terça-feira|quarta-feira|quinta-feira|sexta-feira|sábado),?\\s*${day} de ${monthLong} de ${year}`, 'i');
-
     const cell = page.getByRole('gridcell', { name: datePattern }).first();
     await cell.waitFor({ state: 'visible', timeout: this.calendarTimeoutMs });
     await cell.click({ timeout: this.interactionTimeoutMs });
-    this.log(execId, 'DATE_READY', `date=${date} input="${day} de ${target.toLocaleDateString('pt-BR', { month: 'short' }).replace(/\.$/, '')} de ${year}" mode=canonical-gridcell`);
+    this.log(execId, 'DATE_READY', `date=${date} mode=canonical-gridcell`);
   }
 
   private async setTime(execId: string, page: Page, time: string) {
@@ -268,7 +257,7 @@ class FacebookAutomationService {
     return this.serial(async () => {
       const execId = 'schedule';
       const page = await facebookBrowser.getOperationalPage();
-      await facebookSession.ensureHealthy();
+      await facebookSession.requireAuthenticated();
       await this.goToGroup(execId, page, input.groupUrl);
       await this.openComposer(execId, page, input.groupUrl);
       await this.generateLinkPreview(execId, page, input.content, input.affiliateUrl);
@@ -276,8 +265,7 @@ class FacebookAutomationService {
       await this.setDate(execId, page, input.scheduledDate);
       await this.setTime(execId, page, input.scheduledTime);
       await this.confirmSchedule(execId, page);
-      this.schedulesSincePlannerVerification += 1;
-      return { success: true, scheduledAt: `${input.scheduledDate}T${input.scheduledTime}` , submitted: true };
+      return { success: true, scheduledAt: `${input.scheduledDate}T${input.scheduledTime}`, submitted: true };
     }).catch((error: any) => ({ success: false, error: error?.message || String(error) }));
   }
 }
