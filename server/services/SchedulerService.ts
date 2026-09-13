@@ -314,6 +314,19 @@ export class SchedulerService {
                   logger.scheduler('PLANNER_RECONCILIATION_PERIODIC trigger=5_confirmed');
                   const plannerAll = await storage.getPublications();
                   await this.reconcileNearTermScheduledPublications(plannerAll, settings, Date.now());
+                  try {
+                    const plannerText = (await facebookAutomation.getScheduledPlannerText(normalizeGroupUrl(settings.facebook_group_url))).replace(/\s+/g, ' ').toLowerCase();
+                    for (const candidate of candidates) {
+                      const name = candidate.product_name.replace(/\s+/g, ' ').trim().toLowerCase();
+                      if (name.length >= 12 && plannerText.includes(name)) {
+                        usedProducts.add(candidate.id);
+                        logger.scheduler('PLANNER_PRODUCT_BLOCKED_PERIODIC product=' + candidate.id + ' name="' + candidate.product_name + '"');
+                      }
+                    }
+                    logger.scheduler('PLANNER_PERIODIC_SCAN status=ok chars=' + plannerText.length);
+                  } catch (err: any) {
+                    logger.scheduler('PLANNER_PERIODIC_SCAN status=failed error=' + (err?.message || err), 'warn');
+                  }
                   scheduledSincePlannerReconciliation = 0;
                 }
               } else if (STRUCTURAL_FACEBOOK_ERRORS.has(result.error_message || '')) {
