@@ -109,6 +109,11 @@ class FacebookAutomationService {
     }
   }
 
+  private async waitForComposerToClose(page: Page, timeoutMs = 10000) {
+    const composerDialog = page.locator("div[role='dialog'][aria-label='Criar post']:visible");
+    await composerDialog.waitFor({ state: 'hidden', timeout: timeoutMs });
+  }
+
   private async cleanupFailedSchedule(page: Page) {
     await this.closeResidualDialogs(page);
     const remaining = page.locator("div[role='dialog']:visible");
@@ -120,11 +125,10 @@ class FacebookAutomationService {
   }
 
   private async openComposer(execId: string, page: Page, _groupUrl: string) {
-    // Every schedule starts from a clean composer. Never reuse a failed/stale post.
     const existing = page.locator("div[role='dialog'][aria-label='Criar post']:visible");
     if (await existing.count().catch(() => 0)) {
       await page.keyboard.press('Escape').catch(() => undefined);
-      await existing.waitFor({ state: 'hidden', timeout: 5000 }).catch(() => undefined);
+      await this.waitForComposerToClose(page, 8000);
     }
     await this.closeResidualDialogs(page);
     const trigger = this.composer(page);
@@ -241,7 +245,6 @@ class FacebookAutomationService {
   private async openScheduleDirect(execId: string, page: Page) {
     const button = page.locator("div[role='dialog'][aria-label='Criar post']:visible [aria-label='Programar post']").last();
     await button.waitFor({ state: 'visible', timeout: 12000 });
-    // Do not press Enter on unrelated role=option elements. The canonical flow is a direct click.
     await button.click({ timeout: this.interactionTimeoutMs });
     const dialog = this.scheduleDialog(page);
     await dialog.waitFor({ state: 'visible', timeout: 12000 });
@@ -299,10 +302,16 @@ class FacebookAutomationService {
       throw new Error('FACEBOOK_SCHEDULE_CONFIRM_DISABLED');
     }
     await button.click({ timeout: this.interactionTimeoutMs });
+
     const plannerUrl = groupUrl.replace(/\/+$/, '') + '/scheduled_posts';
     const shouldVerify = ++this.schedulesSincePlannerVerification >= this.plannerVerificationInterval;
-    if (!shouldVerify) return { success: true, plannerUrl, submitted: true };
+    if (!shouldVerify) {
+      await this.waitForComposerToClose(page, 10000);
+      return { success: true, plannerUrl, submitted: true };
+    }
+
     this.schedulesSincePlannerVerification = 0;
+    await this.waitForComposerToClose(page, 10000);
     const check = await this.checkPostInPlanner(page, groupUrl, content, date, time, productName);
     if (!check.verified) return { success: false, submitted: true, uncertain: true, plannerUrl, error: 'FACEBOOK_PLANNER_UNVERIFIED' };
     if (check.found) return { success: true, plannerUrl, submitted: true };
@@ -310,6 +319,39 @@ class FacebookAutomationService {
     if (recheck.verified && recheck.found) return { success: true, plannerUrl, submitted: true };
     if (!recheck.verified) return { success: false, submitted: true, uncertain: true, plannerUrl, error: 'FACEBOOK_PLANNER_UNVERIFIED' };
     return { success: false, submitted: true, uncertain: true, plannerUrl, error: 'FACEBOOK_PLANNER_POST_NOT_FOUND' };
+  }
+
+  async verifyGroup(groupUrl: string) {
+    try {
+      await facebookSession.requireAuthenticated();
+      const page = await facebookBrowser.getOperationalPage();
+      const expected = new URL(groupUrl);
+      const current = new URL(page.url());
+      if (current.origin !== expected.origin || current.pathname.replace(/\/+$/, '') !== expected.pathname.replace(/\/+$/, '')) {
+        await page.goto(groupUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+      }
+      return {
+        success: true,
+        groupUrl,
+        accessible: true,
+        url: page.url(),
+        title: await page.title().catch(() => ''),
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        groupUrl,
+        accessible: false,
+        error: error?.message || String(error),
+      };
+    }
+  }
+
+  async publishTest(_groupUrl: string) {
+    return {
+      success: false,
+      message: 'FACEBOOK_TEST_PUBLISH_DISABLED: use o fluxo de agendamento real.',
+    };
   }
 
   async checkScheduledPost(groupUrl: string, content: string, date: string, time: string, productName?: string) {
