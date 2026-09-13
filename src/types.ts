@@ -19,6 +19,7 @@ export interface Product {
 }
 
 export type PublicationStatus = 'draft' | 'attempting' | 'facebook_submitted' | 'scheduled' | 'publishing' | 'published' | 'failed' | 'unknown' | 'cancelled';
+export type PublicationBusinessStatus = 'not_published' | 'published';
 
 export interface Publication {
   id: string;
@@ -26,6 +27,7 @@ export interface Publication {
   product?: Product;
   scheduled_at: string;
   status: PublicationStatus;
+  business_status?: PublicationBusinessStatus;
   content: string;
   facebook_group_url?: string;
   facebook_post_url?: string;
@@ -40,6 +42,10 @@ export interface Publication {
   updated_at: string;
 }
 
+export function getPublicationBusinessStatus(publication: Pick<Publication, 'status'>): PublicationBusinessStatus {
+  return publication.status === 'published' ? 'published' : 'not_published';
+}
+
 export interface AppSettings {
   facebook_group_url: string;
   daily_limit: number;
@@ -49,6 +55,8 @@ export interface AppSettings {
   crawler_target_urls: string[];
   nvidia_model: string;
 }
+
+export type ThemeMode = 'light' | 'dark' | 'system';
 
 export interface OperationalQuota {
   current_month: string;
@@ -88,18 +96,16 @@ export interface SystemUser {
   role: string;
 }
 
-export type ThemeMode = 'light' | 'dark' | 'system';
-
-export interface FacebookSessionStatus {
+export type FacebookSessionStatus = {
   connected: boolean;
-  status: 'connected' | 'requires_reauth' | 'disconnected';
+  status: 'connected' | 'connecting' | 'requires_reauth' | 'disconnected';
   last_authenticated_at?: string;
   configured_group_url?: string;
   group_accessible?: boolean;
   connected_user?: string;
   profile_dir: string;
   details?: string;
-}
+};
 
 export interface LogEntry {
   id: string;
