@@ -45,7 +45,7 @@ class FacebookAutomationService {
     if(Number.isNaN(target.getTime())||target.getTime()<=Date.now())throw new Error('FACEBOOK_SCHEDULE_IN_PAST');
     const day=String(target.getDate()),year=String(target.getFullYear());
     const monthLong=target.toLocaleDateString('pt-BR',{month:'long'});
-    const monthShort=target.toLocaleDateString('pt-BR',{month:'short'}).replace(/\\.$/,'');
+    const monthShort=target.toLocaleDateString('pt-BR',{month:'short'}).replace(/\.$/,'');
     const canonicalLabel=`${day} de ${monthShort} de ${year}`;
 
     // Canonical flow: Facebook's date control is editable. Prefer typing the
@@ -62,7 +62,7 @@ class FacebookAutomationService {
       const aria=(await input.getAttribute('aria-label').catch(()=>''))||'';
       const placeholder=(await input.getAttribute('placeholder').catch(()=>''))||'';
       const value=await input.inputValue().catch(()=>'');
-      if(type==='date'||/data|date/i.test(aria+' '+placeholder)||/\\d{1,2} de \\w+ de \\d{4}/i.test(value)){
+      if(type==='date'||/data|date/i.test(aria+' '+placeholder)||/\d{1,2} de \w+ de \d{4}/i.test(value)){
         const formats=[canonicalLabel,`${day} de ${monthLong} de ${year}`,date];
         for(const formatted of formats){
           try{
@@ -82,7 +82,7 @@ class FacebookAutomationService {
     // Fallback only when Facebook exposes no editable date field.
     await this.openDatePicker(page,trigger);
     const cells=page.locator("[role='gridcell']:visible");
-    const pattern=new RegExp('\\\\b'+day+' de (?:'+monthLong+'|'+monthShort+') de '+year+'\\\\b','i');
+    const pattern=new RegExp('\\b'+day+' de (?:'+monthLong+'|'+monthShort+') de '+year+'\\b','i');
     const count=await cells.count().catch(()=>0);
     for(let i=0;i<count;i++){
       const candidate=cells.nth(i);
