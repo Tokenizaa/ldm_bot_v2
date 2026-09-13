@@ -11,6 +11,7 @@ export class FacebookSessionService {
   private async withLock<T>(operation:()=>Promise<T>):Promise<T>{const previous=this.sessionLock;let release!:()=>void;this.sessionLock=new Promise<void>(resolve=>{release=resolve;});await previous;try{return await operation();}finally{release();}}
   getStatus():FacebookSessionStatus{return{...this.status};}
   private async isLoginPage():Promise<boolean>{try{const page=await facebookBrowser.getOperationalPage();const currentUrl=page.url();if(/\/login|\/checkpoint|\/recover/i.test(currentUrl))return true;return await page.locator('input[name="email"], input[name="pass"], form[action*="login"]').count().catch(()=>0)>0;}catch{return false;}}
+  private isGroupUrlMatch(currentUrl:string,targetUrl:string):boolean{try{const current=new URL(currentUrl),target=new URL(targetUrl);return current.origin===target.origin&&current.pathname.replace(/\/+$/,'')===target.pathname.replace(/\/+$/,'');}catch{return false;}}
 
   private async waitForGroupOperational(page:any,targetUrl:string):Promise<boolean>{
     const expected=new URL(targetUrl),pathname=expected.pathname.replace(/\/+$/,'');
