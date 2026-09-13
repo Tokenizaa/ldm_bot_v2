@@ -104,6 +104,14 @@ export class FacebookCopyAgent {
       .trim();
   }
 
+  getPublicationValidationReason(raw: string, product: Product): string {
+    const productName = this.cleanProductName(product.product_name);
+    const brand = this.cleanField(product.brand);
+    const category = this.cleanField(product.category);
+    const sku = this.cleanField(product.sku);
+    return this.validationReason(raw, productName, brand, category, sku);
+  }
+
   isPublicationReady(raw: string, product: Product): boolean {
     const productName = this.cleanProductName(product.product_name);
     const brand = this.cleanField(product.brand);
