@@ -40,7 +40,7 @@ class FacebookAutomationService {
   private async openScheduleDirect(execId:string,page:Page){const button=page.locator("[aria-label='Programar post']:visible").last();await button.waitFor({state:'visible',timeout:12000});await this.resolveMentionTypeahead(execId,page);try{await button.click({timeout:8000});}catch{await button.click({timeout:this.interactionTimeoutMs,force:true});}const dialog=page.locator("[role='dialog']:visible").filter({has:page.getByRole('combobox',{name:/Abrir seletor de data/})}).first();await dialog.waitFor({state:'visible',timeout:12000});}
   private async openDatePicker(page:Page,trigger:Locator){if(await page.locator("[role='gridcell']:visible").count().catch(()=>0)>0)return;await trigger.click({timeout:this.interactionTimeoutMs}).catch(async()=>trigger.click({force:true,timeout:this.interactionTimeoutMs}));await page.locator("[role='gridcell']:visible").first().waitFor({state:'visible',timeout:this.calendarTimeoutMs});}
   private async setDate(execId:string,page:Page,date:string){
-    if(!/^\\d{4}-\\d{2}-\\d{2}$/.test(date))throw new Error('FACEBOOK_DATE_INVALID');
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(date))throw new Error('FACEBOOK_DATE_INVALID');
     const target=new Date(date+'T12:00:00-03:00');
     if(Number.isNaN(target.getTime())||target.getTime()<=Date.now())throw new Error('FACEBOOK_SCHEDULE_IN_PAST');
     const day=String(target.getDate()),year=String(target.getFullYear());
