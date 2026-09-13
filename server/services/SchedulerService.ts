@@ -225,8 +225,8 @@ export class SchedulerService {
       // inclusive registros criados antes da persistência no Supabase.
       let plannerBody = '';
       try {
-        plannerBody = await facebookAutomation.getScheduledPlannerText(normalizeGroupUrl(settings.facebook_group_url));
-        logger.scheduler('PLANNER_INITIAL_SCAN status=ok chars=' + plannerBody.length);
+        plannerBody = await facebookAutomation.getFacebookExistingProductText(normalizeGroupUrl(settings.facebook_group_url));
+        logger.scheduler('FACEBOOK_EXISTING_SCAN status=ok chars=' + plannerBody.length);
       } catch (err: any) {
         logger.scheduler('PLANNER_INITIAL_SCAN status=failed error=' + (err?.message || err), 'warn');
       }
