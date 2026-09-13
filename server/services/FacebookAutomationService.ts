@@ -542,6 +542,21 @@ class FacebookAutomationService {
     return { success: false, message: 'FACEBOOK_TEST_PUBLISH_DISABLED: use o fluxo de agendamento real.' };
   }
 
+  private async getFacebookExistingProductText(groupUrl: string): Promise<string> {
+    const page = await facebookBrowser.getOperationalPage();
+    await facebookSession.requireAuthenticated();
+    const plannerUrl = groupUrl.replace(/\/+$/, '') + '/scheduled_posts';
+    await page.goto(plannerUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
+    await page.waitForFunction(() => !!(document.body.innerText || '').trim(), null, { timeout: 10000 }).catch(() => undefined);
+    const planner = await page.locator('body').innerText().catch(() => '');
+
+    await page.goto(groupUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
+    await page.waitForFunction(() => !!(document.body.innerText || '').trim(), null, { timeout: 10000 }).catch(() => undefined);
+    const group = await page.locator('body').innerText().catch(() => '');
+
+    return (planner + ' ' + group).replace(/\s+/g, ' ').trim();
+  }
+
   async getScheduledPlannerText(groupUrl: string): Promise<string> {
     const page = await facebookBrowser.getOperationalPage();
     await facebookSession.requireAuthenticated();
