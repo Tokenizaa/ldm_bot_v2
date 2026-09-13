@@ -149,10 +149,10 @@ jobs:
           bun install --frozen-lockfile
           bunx tsc --noEmit
 
-      - name: Commit fix and remove workflow
+      - name: Commit fix
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add server/services/FacebookAutomationService.ts .github/workflows/fix-facebook-date-time.yml
+          git add server/services/FacebookAutomationService.ts
           git commit -m "fix: restore Facebook date and time controls"
           git push
