@@ -321,7 +321,7 @@ export class SchedulerService {
       const confirmedCount = scheduled.filter(p => p.status === 'scheduled').length;
       const message = structuralFailure
         ? `Agendamento interrompido por falha estrutural do Facebook: ${structuralFailure}`
-        : `${confirmedCount} agendamento(s) confirmado(s) no Facebook).`;
+        : `${confirmedCount} agendamento(s) confirmado(s) no Facebook.`;
       logger.scheduler(
         `MONTHLY_DONE month=${monthPrefix} confirmed=${confirmedCount} quota=${quota.monthly_publication_count}/${quota.monthly_limit}${structuralFailure ? ' halted=' + structuralFailure : ''}`,
         structuralFailure ? 'warn' : 'success'
@@ -397,7 +397,13 @@ export class SchedulerService {
         }
         logger.scheduler(`UNKNOWN_CONFIRMED_ABSENT id=${pub.id} ausente no planner. Prosseguindo com agendamento seguro.`);
       } catch (err: any) {
-        logger.scheduler(`UNKNOWN_PRE_CHECK_FAILED id=${pub.id}: ${err.message}`, 'warn');
+        const errorMessage = `UNKNOWN_PLANNER_CHECK_FAILED: ${err.message || 'falha desconhecida ao consultar o planner Facebook'}`;
+        logger.scheduler(`UNKNOWN_PRE_CHECK_FAILED id=${pub.id}: ${errorMessage}; mantendo estado unknown e bloqueando novo envio`, 'warn');
+        return storage.updatePublication(pub.id, {
+          status: 'unknown',
+          error_message: errorMessage,
+          next_attempt_at: undefined
+        });
       }
     }
 
