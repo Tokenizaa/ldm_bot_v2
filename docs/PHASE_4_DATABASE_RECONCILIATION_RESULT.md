@@ -22,18 +22,23 @@ Data: 13/09/2026
 3. Nenhuma identidade de produto foi alterada.
 4. Nenhum post foi apagado.
 5. Nenhum registro foi marcado artificialmente como `published`.
-6. Copies ausentes ou contaminadas foram substituídas por um fallback determinístico seguro para deixar o banco publicável enquanto a arquitetura normal permanece responsável por geração via IA no crawler.
+6. Copies ausentes ou contaminadas foram substituídas por fallback determinístico seguro. Isso limpa o banco sem alterar o contrato de que a geração normal pertence ao crawler/IA.
+7. `ContentService.ensureCopyForPublication()` deixou de gerar copy durante o agendamento. Ele agora funciona como **gate de prontidão**: copy ausente ou inválida gera `PRODUCT_NOT_READY` e bloqueia o agendamento.
 
-## Achado arquitetural mantido para a próxima revisão
+## Contrato arquitetural confirmado
 
-O código atual do Scheduler ainda possui uma barreira de segurança que chama `ContentService.ensureCopyForPublication()` durante o agendamento. Isso não deve ser o fluxo normal.
+`Crawler → produto completo → IA → validação → affiliate_links.facebook_copy → Scheduler → Facebook`
 
-O contrato desejado permanece:
+O Scheduler agora consome copy previamente preparada. Ele não inicia uma segunda geração de IA como comportamento normal.
 
-`Crawler → produto completo → IA → validação → banco → Scheduler`
+## Validação
 
-Na próxima correção de código, o Scheduler deverá tratar produto sem copy válida como `PRODUCT_NOT_READY` e não iniciar uma nova geração de IA como comportamento normal.
+A validação no banco confirmou 268 produtos, 268 links canônicos, zero copy vazia, zero copy contaminada pelos padrões auditados, zero copy acima de 500 caracteres e zero publicação real.
+
+A busca de referências do método `ensureCopyForPublication()` no GitHub não retornou chamadas adicionais fora do fluxo já conhecido, embora a API de code search tenha indicado resultado incompleto.
 
 ## Status
 
-A base de dados foi reconciliada estruturalmente e está pronta para a próxima etapa de reconciliação com o Facebook Planner.
+**Fase 4 concluída.**
+
+A base está reconciliada estruturalmente e o fluxo de conteúdo está preparado para a próxima etapa: reconciliação dos 77 registros internos com o Facebook Planner.
