@@ -197,6 +197,21 @@ export class StorageService {
     return (data || []).map(row => ({ id: String(row.id), product_id: String(row.affiliate_link_id), price: Number(row.price), checked_at: String(row.checked_at) }));
   }
 
+  async getPublishedProductIdentityKeys(groupUrl?: string): Promise<Set<string>> {
+    const { data, error } = await this.supabase
+      .from('publication_history')
+      .select('product_identity_key,group_id,status')
+      .in('status', ['scheduled', 'published']);
+    if (error) throw new Error(`Falha ao consultar identidade dos produtos publicados: ${error.message}`);
+    const normalizedGroup = groupUrl ? normalizeGroupUrl(groupUrl) : undefined;
+    const keys = new Set<string>();
+    for (const row of data || []) {
+      if (normalizedGroup && row.group_id && normalizeGroupUrl(String(row.group_id)) !== normalizedGroup) continue;
+      if (row.product_identity_key) keys.add(String(row.product_identity_key));
+    }
+    return keys;
+  }
+
   async getPublications(status?: PublicationStatus): Promise<Publication[]> {
     let query = this.supabase.from('posts').select('*').order('scheduled_at', { ascending: true });
     if (status === 'unknown') {
@@ -344,6 +359,31 @@ export class StorageService {
     const { data, error } = await this.supabase.from('posts').update(clean).eq('id', id).select('*').maybeSingle();
     if (error) throw new Error(`Falha ao atualizar publicação: ${error.message}`);
     if (!data) return undefined;
+
+    if (updates.status === 'scheduled' || updates.status === 'published') {
+      const product = data.affiliate_link_id ? await this.getProductById(data.affiliate_link_id) : undefined;
+      if (product?.product_identity_key) {
+        const historyRecord = {
+          id: crypto.randomUUID(),
+          affiliate_link_id: data.affiliate_link_id,
+          product_identity_key: product.product_identity_key,
+          post_id: data.id,
+          group_id: data.group_id || null,
+          plan_id: data.plan_id || null,
+          scheduled_at: data.scheduled_at || null,
+          published_at: updates.status === 'published' ? (data.published_at || new Date().toISOString()) : null,
+          status: updates.status,
+          created_at: new Date().toISOString()
+        };
+        const { error: historyError } = await this.supabase
+          .from('publication_history')
+          .upsert(historyRecord, { onConflict: 'post_id' });
+        if (historyError) {
+          throw new Error(`Falha ao registrar histórico de publicação: ${historyError.message}`);
+        }
+      }
+    }
+
     return this.mapRowToPublication(data, data.affiliate_link_id ? await this.getProductById(data.affiliate_link_id) : undefined);
   }
 
