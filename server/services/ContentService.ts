@@ -49,9 +49,14 @@ export class ContentService {
     }
 
     const content = String(existingCopy || '').trim();
-    if (!content || !this.copyAgent.isPublicationReady(content, product)) {
-      logger.scheduler(`PRODUCT_NOT_READY product=${product.id} reason=facebook_copy_missing_or_invalid`, 'warn');
+    if (!content) {
+      logger.scheduler(`PRODUCT_NOT_READY product=${product.id} reason=facebook_copy_missing`, 'error');
       throw new Error('PRODUCT_NOT_READY');
+    }
+    if (!this.copyAgent.isPublicationReady(content, product)) {
+      const reason = this.copyAgent.getPublicationValidationReason(content, product);
+      logger.scheduler(`PRODUCT_NOT_READY product=${product.id} reason=facebook_copy_invalid validation=${reason}`, 'error');
+      throw new Error(`PRODUCT_NOT_READY:facebook_copy_invalid:${reason}`);
     }
 
     return { content, affiliateUrl };
