@@ -13,9 +13,8 @@ export class ContentService {
 
   async generateCopyForProduct(product: Product, customModel?: string): Promise<GeneratedProductCopy> {
     const affiliateUrl = buildAffiliateUrl(product.affiliate_url || product.original_url);
-
-    if (!affiliateUrl.includes('/20889?afiliado=')) {
-      const error = `URL de afiliado inválida: ${affiliateUrl}`;
+    if (!this.isCanonicalAffiliateUrl(product, affiliateUrl)) {
+      const error = `URL de afiliado inválida ou fora do padrão canônico: ${affiliateUrl}`;
       logger.ai(error, 'error');
       throw new Error(error);
     }
@@ -33,18 +32,20 @@ export class ContentService {
     return this.copyAgent.isPublicationReady(content, product);
   }
 
+  private isCanonicalAffiliateUrl(product: Product, canonicalUrl: string): boolean {
+    const stored = String(product.affiliate_url || '').trim();
+    return Boolean(canonicalUrl) && stored === canonicalUrl;
+  }
+
   /**
    * Publication-time safety gate only.
-   *
-   * The Scheduler consumes product data prepared by the crawler. It must not
-   * silently invoke the AI as part of normal scheduling. Missing or invalid
-   * persisted copy is a readiness error and must be repaired by the crawler
-   * pipeline before the product becomes schedulable.
+   * The Scheduler consumes product data prepared by the crawler and must not
+   * silently invoke AI or repair affiliate URLs during normal scheduling.
    */
   async ensureCopyForPublication(product: Product, existingCopy?: string): Promise<GeneratedProductCopy> {
     const affiliateUrl = buildAffiliateUrl(product.affiliate_url || product.original_url);
-    if (!affiliateUrl.includes('/20889?afiliado=')) {
-      throw new Error('URL de afiliado inválida: ' + affiliateUrl);
+    if (!this.isCanonicalAffiliateUrl(product, affiliateUrl)) {
+      throw new Error('URL de afiliado inválida ou fora do padrão canônico: ' + affiliateUrl);
     }
 
     const content = String(existingCopy || '').trim();
