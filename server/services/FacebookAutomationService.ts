@@ -100,6 +100,17 @@ class FacebookAutomationService {
     }
   }
 
+  private async cleanupFailedSchedule(page: Page) {
+    // A failed native Facebook step can leave the composer/dialog covering the group.
+    // Close only the visible dialogs; successful scheduling closes the composer itself.
+    for (let i = 0; i < 3; i++) {
+      const visibleDialogs = await page.locator("div[role='dialog']:visible").count().catch(() => 0);
+      if (!visibleDialogs) return;
+      await page.keyboard.press('Escape').catch(() => undefined);
+      await page.waitForTimeout(250);
+    }
+  }
+
   private async openComposer(execId: string, page: Page, groupUrl: string) {
     const canonical = page.locator("div[role='dialog'][aria-label='Criar post']:visible");
     if (await canonical.count().catch(() => 0)) {
@@ -239,7 +250,9 @@ class FacebookAutomationService {
     const day = String(target.getDate());
     const monthLong = target.toLocaleDateString('pt-BR', { month: 'long' });
     const year = String(target.getFullYear());
-    const datePattern = new RegExp(`(?:domingo|segunda-feira|terça-feira|quarta-feira|quinta-feira|sexta-feira|sábado),?\\s*${day} de ${monthLong} de ${year}`, 'i');
+    // Facebook exposes the complete date through the gridcell accessible name.
+    // Use a real RegExp whitespace escape; do not double-escape it.
+    const datePattern = new RegExp(`(?:domingo|segunda-feira|terça-feira|quarta-feira|quinta-feira|sexta-feira|sábado),?\s*${day} de ${monthLong} de ${year}`, 'i');
     const cell = page.getByRole('gridcell', { name: datePattern }).first();
     await cell.waitFor({ state: 'visible', timeout: this.calendarTimeoutMs });
     await cell.click({ timeout: this.interactionTimeoutMs });
@@ -266,16 +279,21 @@ class FacebookAutomationService {
     return this.serial(async () => {
       const execId = 'schedule';
       const page = await facebookBrowser.getOperationalPage();
-      await facebookSession.requireAuthenticated();
-      await this.goToGroup(execId, page, input.groupUrl);
-      await this.openComposer(execId, page, input.groupUrl);
-      await this.generateLinkPreview(execId, page, input.content, input.affiliateUrl);
-      await this.openScheduleDirect(execId, page);
-      await this.setDate(execId, page, input.scheduledDate);
-      await this.setTime(execId, page, input.scheduledTime);
-      await this.confirmSchedule(execId, page);
-      return { success: true, scheduledAt: `${input.scheduledDate}T${input.scheduledTime}`, submitted: true };
-    }).catch((error: any) => ({ success: false, error: error?.message || String(error) }));
+      try {
+        await facebookSession.requireAuthenticated();
+        await this.goToGroup(execId, page, input.groupUrl);
+        await this.openComposer(execId, page, input.groupUrl);
+        await this.generateLinkPreview(execId, page, input.content, input.affiliateUrl);
+        await this.openScheduleDirect(execId, page);
+        await this.setDate(execId, page, input.scheduledDate);
+        await this.setTime(execId, page, input.scheduledTime);
+        await this.confirmSchedule(execId, page);
+        return { success: true, scheduledAt: `${input.scheduledDate}T${input.scheduledTime}`, submitted: true };
+      } catch (error: any) {
+        await this.cleanupFailedSchedule(page).catch(() => undefined);
+        return { success: false, error: error?.message || String(error) };
+      }
+    });
   }
 }
 
