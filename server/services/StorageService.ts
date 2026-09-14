@@ -409,7 +409,7 @@ export class StorageService {
           .from('publication_history')
           .upsert(historyRecord, { onConflict: 'post_id' });
         if (historyError) {
-          throw new Error(`Falha ao registrar histórico de publicação: ${historyError.message}`);
+          logger.scheduler(`AVISO_HISTORY_NAO_GRAVA post=${data.id} err=${historyError.message}`, 'warn');
         }
       }
     }

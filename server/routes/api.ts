@@ -2,7 +2,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { storage } from '../services/StorageService.js';
 import { crawler } from '../services/CrawlerService.js';
 import { contentService } from '../services/ContentService.js';
-import { scheduler } from '../services/RuntimeSchedulerService.js';
+import { scheduler } from '../services/SchedulerService.js';
 import { facebookSession } from '../services/FacebookSessionService.js';
 import { facebookAutomation } from '../services/FacebookAutomationService.js';
 import { nvidiaAI } from '../services/NvidiaAIService.js';

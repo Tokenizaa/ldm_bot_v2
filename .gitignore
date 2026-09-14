@@ -11,3 +11,4 @@ data/browser-profiles/
 storage/
 auth/
 sessions/
+.playwright-mcp/

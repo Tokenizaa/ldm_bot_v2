@@ -142,19 +142,21 @@ export class SchedulerService {
           pub.product.product_name
         );
 
-        if (!check.found) {
+        if (check.found) {
+          logger.scheduler(`PLANNER_RECONCILIATION_OK id=${pub.id} slot=${date}T${time}`);
+          continue;
+        }
+        if (!check.verified) {
           logger.scheduler(
-            `PLANNER_RECONCILIATION_MISSING id=${pub.id} slot=${date}T${time} DB=scheduled Facebook=absent; resetando para draft`,
+            `PLANNER_RECONCILIATION_UNVERIFIED id=${pub.id} slot=${date}T${time} DB=scheduled; consulta instável, reserva mantida para não duplicar`,
             'warn'
           );
-          await storage.updatePublication(pub.id, {
-            status: 'draft',
-            error_message: 'Agendamento não encontrado no planner Facebook; liberado para recriação segura.',
-            planner_url: undefined
-          });
-        } else {
-          logger.scheduler(`PLANNER_RECONCILIATION_OK id=${pub.id} slot=${date}T${time}`);
+          continue;
         }
+        logger.scheduler(
+          `PLANNER_RECONCILIATION_CONFLICT id=${pub.id} slot=${date}T${time} DB=scheduled FB=verified-absent; reserva mantida (não desbloqueia produto confirmado)`,
+          'warn'
+        );
       } catch (err: any) {
         logger.scheduler(`PLANNER_RECONCILIATION_ERROR id=${pub.id}: ${err.message}`, 'warn');
       }
@@ -256,8 +258,15 @@ export class SchedulerService {
       let scheduledSincePlannerReconciliation = 0;
       let candidateIndex = 0;
       let structuralFailure: string | null = null;
+      let consecutiveStructuralFailures = 0;
 
-      outer: for (const date of monthDates(year, month)) {
+      const monthDays = monthDates(year, month);
+      const todayLocal = localDateString(now);
+      const firstEligibleDay = monthDays.findIndex(d => d >= todayLocal);
+      const daysToPlan = firstEligibleDay >= 0 ? monthDays.slice(firstEligibleDay) : monthDays;
+      logger.scheduler(`PLANNER_WINDOW month=${monthPrefix} firstDay=${daysToPlan[0]} lastDay=${daysToPlan[daysToPlan.length - 1]} days=${daysToPlan.length}`);
+
+      outer: for (const date of daysToPlan) {
         for (const time of hours) {
           const totalConfirmedThisMonth = reservedMonth + scheduled.filter(p => p.status === 'scheduled').length;
           if (totalConfirmedThisMonth >= monthlyLimit) break outer;
@@ -309,6 +318,7 @@ export class SchedulerService {
             if (result) {
               scheduled.push(result);
               if (result.status === 'scheduled') {
+                consecutiveStructuralFailures = 0;
                 usedProducts.add(product.id);
                 usedSlots.add(normalizeScheduledAt(result.scheduled_at));
                 scheduledSincePlannerReconciliation += 1;
@@ -320,8 +330,15 @@ export class SchedulerService {
                   scheduledSincePlannerReconciliation = 0;
                 }
               } else if (STRUCTURAL_FACEBOOK_ERRORS.has(result.error_message || '')) {
-                structuralFailure = result.error_message || 'FACEBOOK_STRUCTURAL_FAILURE';
-                break outer;
+                consecutiveStructuralFailures += 1;
+                logger.scheduler(`RUNTIME_SCHEDULE_FAILED product=${product.id} slot=${date}T${time} error=${result.error_message}`, 'error');
+                if (consecutiveStructuralFailures >= 2) {
+                  structuralFailure = result.error_message || 'FACEBOOK_STRUCTURAL_FAILURE';
+                  break outer;
+                }
+              } else {
+                consecutiveStructuralFailures = 0;
+                logger.scheduler(`RUNTIME_SCHEDULE_FAILED product=${product.id} slot=${date}T${time} error=${result.error_message}`, 'error');
               }
             }
           } catch (itemErr: any) {
@@ -329,8 +346,13 @@ export class SchedulerService {
             logger.scheduler(`ITEM_SCHEDULE_ERROR id=${publication.id} product=${product.id} slot=${date}T${time} error=${errorMessage}`, 'warn');
 
             if (STRUCTURAL_FACEBOOK_ERRORS.has(errorMessage)) {
-              structuralFailure = errorMessage;
-              break outer;
+              consecutiveStructuralFailures += 1;
+              if (consecutiveStructuralFailures >= 2) {
+                structuralFailure = errorMessage;
+                break outer;
+              }
+            } else {
+              consecutiveStructuralFailures = 0;
             }
           }
         }
@@ -363,7 +385,7 @@ export class SchedulerService {
       throw new Error('Produto sem link afiliado /20889 válido.');
     }
 
-    const safeCopy = await contentService.ensureCopyForPublication(pub.product, pub.content);
+    const safeCopy = await contentService.ensureCopyForPublication(pub.product, pub.content || pub.product.facebook_copy);
     const content = safeCopy.content?.trim();
     if (!content) throw new Error('FACEBOOK_COPY_REGENERATION_FAILED');
 
@@ -414,7 +436,14 @@ export class SchedulerService {
             planner_url: check.plannerUrl
           });
         }
-        logger.scheduler(`UNKNOWN_CONFIRMED_ABSENT id=${pub.id} ausente no planner. Prosseguindo com agendamento seguro.`);
+        if (!check.verified) {
+          logger.scheduler(`UNKNOWN_PLANNER_UNVERIFIED id=${pub.id} consulta instável; mantendo unknown e bloqueando novo envio para não duplicar`, 'warn');
+          return storage.updatePublication(pub.id, {
+            status: 'unknown',
+            error_message: 'UNKNOWN_PLANNER_UNVERIFIED: Planner não pôde confirmar a ausência; novo envio bloqueado.'
+          });
+        }
+        logger.scheduler(`UNKNOWN_CONFIRMED_ABSENT id=${pub.id} ausente confirmado no planner. Prosseguindo com agendamento seguro.`);
       } catch (err: any) {
         const errorMessage = `UNKNOWN_PLANNER_CHECK_FAILED: ${err.message || 'falha desconhecida ao consultar o planner Facebook'}`;
         logger.scheduler(`UNKNOWN_PRE_CHECK_FAILED id=${pub.id}: ${errorMessage}; mantendo estado unknown e bloqueando novo envio`, 'warn');
@@ -526,12 +555,14 @@ export class SchedulerService {
               error_message: undefined,
               planner_url: check.plannerUrl
             });
-          } else {
+          } else if (check.verified) {
             logger.scheduler(`UNKNOWN_VERIFIED_ABSENT id=${pub.id}; resetting to draft for safe retry`, 'warn');
             await storage.updatePublication(pub.id, {
               status: 'draft',
               error_message: 'Verificado ausente no planner após incerteza anterior.'
             });
+          } else {
+            logger.scheduler(`UNKNOWN_CHECK_UNVERIFIED id=${pub.id}; ausência não confirmada, mantendo unknown`, 'warn');
           }
         } catch (err: any) {
           logger.scheduler(`UNKNOWN_CHECK_FAILED id=${pub.id}: ${err.message}`, 'warn');
@@ -582,7 +613,12 @@ export class SchedulerService {
       return updated || pub;
     }
 
-    logger.scheduler(`RECONCILE_UNKNOWN_ABSENT id=${pub.id} ausente no planner.`, 'warn');
+    if (!check.verified) {
+      logger.scheduler(`RECONCILE_UNKNOWN_UNVERIFIED id=${pub.id} consulta instável; mantendo status unknown`, 'warn');
+      return pub;
+    }
+
+    logger.scheduler(`RECONCILE_UNKNOWN_ABSENT id=${pub.id} ausência confirmada no planner.`, 'warn');
     const updated = await storage.updatePublication(pub.id, {
       status: 'draft',
       error_message: 'Verificado ausente no planner Facebook.'
@@ -600,6 +636,30 @@ export class SchedulerService {
 
   async cancel(_publicationId: string): Promise<Publication | undefined> {
     throw new Error('FACEBOOK_NATIVE_CANCEL_UNSUPPORTED');
+  }
+
+  async retry(publicationId: string): Promise<Publication | undefined> {
+    return this.schedulePublication(publicationId);
+  }
+
+  async getRuntimePublications(): Promise<Publication[]> {
+    return storage.getPublications();
+  }
+
+  async createPublication(productId: string, scheduledAt: string, content: string, groupUrl?: string): Promise<Publication> {
+    const product = await storage.getProductById(productId);
+    if (!product) throw new Error('Produto não encontrado.');
+    const settings = await storage.getSettings();
+    const safeContent = String(content || '').trim() || product.facebook_copy?.trim() || '';
+    const publication = await storage.createPublication({
+      product_id: productId,
+      scheduled_at: scheduledAt,
+      status: 'draft',
+      content: safeContent,
+      facebook_group_url: normalizeGroupUrl(groupUrl || settings.facebook_group_url)
+    });
+    logger.scheduler(`QUEUE_CREATED id=${publication.id} product=${productId} slot=${scheduledAt}`);
+    return publication;
   }
 }
 

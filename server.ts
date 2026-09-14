@@ -12,7 +12,7 @@ async function startServer() {
   const { apiRouter } = await import('./server/routes/api.js');
   const { authRouter } = await import('./server/routes/auth.js');
   const { frontendCompatRouter } = await import('./server/routes/frontend-compat.js');
-  const { scheduler } = await import('./server/services/RuntimeSchedulerService.js');
+  const { scheduler } = await import('./server/services/SchedulerService.js');
 
   const app = express();
   const PORT = 3000;
