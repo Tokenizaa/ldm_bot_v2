@@ -567,6 +567,17 @@ class FacebookAutomationService {
     return (await page.locator('body').innerText().catch(() => '')).replace(/\s+/g, ' ').trim();
   }
 
+  async getScheduledPostCount(groupUrl: string): Promise<{ count: number; source: 'planner' | 'ledger' }> {
+    const text = await this.getScheduledPlannerText(groupUrl);
+    // Heading do planner: "Posts programados · 77" (snapshot real do Facebook).
+    const matches = text.match(/Posts programados[^0-9]*(\d+)/i);
+    if (matches && matches[1]) {
+      const count = Number(matches[1]);
+      if (Number.isFinite(count) && count >= 0) return { count, source: 'planner' };
+    }
+    return { count: 0, source: 'planner' };
+  }
+
   async checkScheduledPost(groupUrl: string, content: string, date: string, time: string, productName?: string) {
     const page = await facebookBrowser.getOperationalPage();
     await facebookSession.requireAuthenticated();

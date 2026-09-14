@@ -38,6 +38,10 @@ export class SchedulerService {
   private readonly plannerReconciliationMaxItems = 10;
   private readonly staleAttemptingThresholdMs = 20 * 60 * 1000;
 
+  private isStructuralFailure(errorMessage: string): boolean {
+    return STRUCTURAL_FACEBOOK_ERRORS.has(errorMessage.split(':')[0].trim());
+  }
+
   private async waitForSchedulePacing(): Promise<void> {
     if (this.lastScheduleOperationAt === 0) {
       this.lastScheduleOperationAt = Date.now();
@@ -208,11 +212,17 @@ export class SchedulerService {
 
       const hours = settings.daily_hours?.length ? settings.daily_hours : DEFAULT_HOURS;
       const usedProducts = new Set(activeProducts.map(p => p.product_id));
-      const usedSlots = new Set(
-        confirmed
-          .filter(p => localDateString(new Date(p.scheduled_at)).startsWith(monthPrefix))
-          .map(p => normalizeScheduledAt(p.scheduled_at))
-      );
+      // Mapa slot->post: reusa qualquer post não-cancelled do mês no seu slot
+      // (draft/failed/unknown são retomados; scheduled/published pulados).
+      const bySlot = new Map<string, Publication>();
+      for (const publication of refreshedAll) {
+        if (publication.status === 'cancelled') continue;
+        const slot = normalizeScheduledAt(publication.scheduled_at);
+        const existing = bySlot.get(slot);
+        if (!existing || ['draft', 'failed', 'unknown'].includes(publication.status)) {
+          bySlot.set(slot, publication);
+        }
+      }
       const existingByKey = new Map<string, Publication>();
       for (const publication of refreshedAll) {
         const key = calculatePublicationIdempotencyKey(
@@ -259,6 +269,7 @@ export class SchedulerService {
       let candidateIndex = 0;
       let structuralFailure: string | null = null;
       let consecutiveStructuralFailures = 0;
+      const usedSlots = new Set<string>();
 
       const monthDays = monthDates(year, month);
       const todayLocal = localDateString(now);
@@ -277,6 +288,67 @@ export class SchedulerService {
 
           const slotIso = localIso(date, time);
           if (new Date(slotIso).getTime() <= Date.now() || usedSlots.has(slotIso)) continue;
+
+          // Slot já reservado no banco (qualquer status) → reusa, não cria.
+          const existingSlotPost = bySlot.get(normalizeScheduledAt(slotIso));
+          if (existingSlotPost) {
+            const ex = existingSlotPost;
+            if (ex.status === 'scheduled' || ex.status === 'published') {
+              usedProducts.add(ex.product_id);
+              usedSlots.add(normalizeScheduledAt(ex.scheduled_at));
+              scheduled.push(ex);
+              continue;
+            }
+            if (!['draft', 'failed', 'unknown'].includes(ex.status)) continue;
+            // NEVER re-schedule a product already confirmed in the ledger.
+            if (ex.product_id && (publishedProductIds.has(ex.product_id) || (ex.product?.product_identity_key && publishedIdentityKeys.has(ex.product.product_identity_key)))) {
+              logger.scheduler(`QUEUE_REUSE_BLOCKED slot=${date}T${time} id=${ex.id} product=${ex.product_id} reason=produto_já_confirmado`);
+              usedProducts.add(ex.product_id);
+              continue;
+            }
+            logger.scheduler(`QUEUE_REUSE slot=${date}T${time} id=${ex.id} status=${ex.status}`);
+            try {
+              const result = await this.schedulePublication(ex.id);
+              if (result) {
+                scheduled.push(result);
+                if (result.status === 'scheduled') {
+                  consecutiveStructuralFailures = 0;
+                  usedProducts.add(ex.product_id);
+                  usedSlots.add(normalizeScheduledAt(result.scheduled_at));
+                  scheduledSincePlannerReconciliation += 1;
+                  if (scheduledSincePlannerReconciliation >= 5) {
+                    logger.scheduler('PLANNER_RECONCILIATION_PERIODIC trigger=5_confirmed');
+                    const plannerAll = await storage.getPublications();
+                    await this.reconcileNearTermScheduledPublications(plannerAll, settings, Date.now());
+                    scheduledSincePlannerReconciliation = 0;
+                  }
+                } else if (this.isStructuralFailure(result.error_message || '')) {
+                  consecutiveStructuralFailures += 1;
+                  logger.scheduler(`RUNTIME_SCHEDULE_FAILED product=${ex.product_id} slot=${date}T${time} error=${result.error_message}`, 'error');
+                  if (consecutiveStructuralFailures >= 2) {
+                    structuralFailure = result.error_message || 'FACEBOOK_STRUCTURAL_FAILURE';
+                    break outer;
+                  }
+                } else {
+                  consecutiveStructuralFailures = 0;
+                  logger.scheduler(`RUNTIME_SCHEDULE_FAILED product=${ex.product_id} slot=${date}T${time} error=${result.error_message}`, 'error');
+                }
+              }
+            } catch (itemErr: any) {
+              const errorMessage = String(itemErr?.message || itemErr || 'ITEM_SCHEDULE_ERROR');
+              logger.scheduler(`ITEM_SCHEDULE_ERROR id=${ex.id} product=${ex.product_id} slot=${date}T${time} error=${errorMessage}`, 'warn');
+              if (this.isStructuralFailure(errorMessage)) {
+                consecutiveStructuralFailures += 1;
+                if (consecutiveStructuralFailures >= 2) {
+                  structuralFailure = errorMessage;
+                  break outer;
+                }
+              } else {
+                consecutiveStructuralFailures = 0;
+              }
+            }
+            continue;
+          }
 
           while (candidateIndex < candidates.length && usedProducts.has(candidates[candidateIndex].id)) {
             candidateIndex++;

@@ -46,6 +46,7 @@ export default function App() {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [envStatus, setEnvStatus] = useState<any>(null);
   const [supabaseSql, setSupabaseSql] = useState<string>('');
+  const [plannerScheduledCount, setPlannerScheduledCount] = useState<number | null>(null);
 
   // Loading states
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -153,6 +154,14 @@ export default function App() {
       // 4. Facebook Status
       const fbData = await apiRequest('/api/facebook/status');
       setFacebookStatus(fbData);
+
+      // 4b. Posts programados no planner real do Facebook (contagem de verdade)
+      if (fbData?.connected) {
+        const schedData = await apiRequest('/api/facebook/scheduled-count').catch(() => ({ count: null }));
+        if (Number.isFinite(schedData?.count)) setPlannerScheduledCount(schedData.count);
+      } else {
+        setPlannerScheduledCount(null);
+      }
 
       // 5. Settings
       const setData = await apiRequest('/api/settings');
@@ -457,6 +466,7 @@ export default function App() {
             <DashboardTab
               stats={stats}
               quota={quota}
+              plannerScheduledCount={plannerScheduledCount}
               onRunCrawler={handleRunCrawler}
               onGenerateBatch={handleGenerateTodayBatch}
               onProcessDue={handleProcessDuePublications}
